@@ -43,33 +43,42 @@ pip install -e .
          └── crops/
    ```
 
-### Training Setup
+### Training Setup (Main Approach)
 
-**Recommended: Use Grouped DataLoaders for efficient training**
+**Recommended: One DataLoader per Dataset with Frequent Shuffling**
+
+Each dataset (Allen, HPA, CP) has its natural channel configuration:
+- **Allen**: 3 channels (~31k samples)
+- **HPA**: 4 channels (~33k samples)
+- **CP**: 5 channels (~36k samples)
 
 ```python
-from channel_adaptive_pipeline.chammi_grouped_dataloader import create_grouped_chammi_dataloaders
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_specific_dataloaders
 
-# Create efficient DataLoaders grouped by channel count (3, 4, 5)
-dataloaders = create_grouped_chammi_dataloader(
+# Create one DataLoader per dataset (Allen, HPA, CP)
+dataloaders = create_dataset_specific_dataloaders(
     csv_file="path/to/CHAMMI/combined_metadata.csv",
     root_dir="path/to/CHAMMI/",
     batch_size=32,
-    shuffle=True,
+    shuffle=True,  # Shuffles every epoch for variety
     target_labels='Label',  # From enriched_meta.csv
     split='train',  # ~100k training samples
     augment=True,  # RandomResizedCrop, flips (no color jitter)
     normalize=True,  # Uses CHAMMI-specific per-channel stats
 )
 
-# Training loop - process each channel count separately
-for channel_count in [3, 4, 5]:
-    dataloader = dataloaders[channel_count]
-    
-    for epoch in range(num_epochs):
+# Training loop - process each dataset separately
+for epoch in range(num_epochs):
+    # Process each dataset
+    for dataset_name in ['Allen', 'HPA', 'CP']:
+        dataloader = dataloaders[dataset_name]
+        
+        # Each dataset has its natural channel configuration
+        channel_count = 3 if dataset_name == 'Allen' else 4 if dataset_name == 'HPA' else 5
+        
         for batch_images, batch_metadatas, batch_labels in dataloader:
             # batch_images shape: (batch_size, channel_count, 128, 128)
-            # All samples have SAME channels → efficient batching!
+            # All samples from same dataset with same channels → efficient batching!
             
             # Your channel-adaptive ViT forward pass
             outputs = model(batch_images, num_channels=channel_count)
@@ -83,28 +92,29 @@ for channel_count in [3, 4, 5]:
             optimizer.zero_grad()
 ```
 
-### Alternative: Dataset-Ordered DataLoader (Better Generalization)
+### Alternative: Interleaved with Shuffled Dataset Order
 
-For better generalization, use the dataset-ordered DataLoader that shuffles dataset order each epoch:
+For better generalization, interleave datasets with shuffled order each epoch:
 
 ```python
-from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_ordered_dataloader
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_interleaved_dataset_dataloader
 
-# Creates DataLoader that shuffles dataset order each epoch
-ordered_dataloader = create_dataset_ordered_dataloader(
+# Interleaves datasets in shuffled order each epoch
+interleaved = create_interleaved_dataset_dataloader(
     csv_file="path/to/CHAMMI/combined_metadata.csv",
     root_dir="path/to/CHAMMI/",
     batch_size=32,
     split='train',
     augment=True,
     normalize=True,
-    shuffle_dataset_order=True,  # Different order each epoch
+    shuffle_dataset_order=True,  # Different dataset order each epoch
 )
 
 for epoch in range(num_epochs):
-    for batch_images, batch_metadatas, batch_labels, channel_count in ordered_dataloader:
-        # Each batch has consistent channel count
+    for batch_images, batch_metadatas, batch_labels, dataset_source in interleaved:
+        # Each batch from one dataset with consistent channels
         # Dataset order changes each epoch (HPA→Allen→CP, then Allen→CP→HPA, etc.)
+        channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
         outputs = model(batch_images, num_channels=channel_count)
         loss = criterion(outputs, batch_labels)
         loss.backward()
