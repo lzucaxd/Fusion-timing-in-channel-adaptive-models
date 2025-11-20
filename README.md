@@ -74,7 +74,7 @@ Also be sure to put a large batch size to minimize computing time, but also smal
 Importing the `run_benchmark` function from `benchmark.py` and passing required fields to the function.
 Example of using the package from command line:
 ```
-python -c "from morphem.benchmark import run_benchmark; 
+python -c "from channel_adaptive_pipeline.benchmark import run_benchmark; 
 run_benchmark('datasets/CHAMMI', 'results', 
 'datasets/CHAMMI/features', 'pretrained_resnet18_features.npy')"
 ```
@@ -106,3 +106,45 @@ Optional field include:
 
 ## Example Images from Each Dataset with Labels
 ![alt text](https://github.com/broadinstitute/MorphEm/blob/main/example_image.png)
+
+---
+
+## CHAMMI Dataset Implementation for Channel-Adaptive Models
+
+This repository now includes a complete dataset implementation for training channel-adaptive vision transformers on CHAMMI. See [`CHAMMI_IMPLEMENTATION_SUMMARY.md`](CHAMMI_IMPLEMENTATION_SUMMARY.md) for full details.
+
+### Quick Start
+
+```python
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_grouped_chammi_dataloaders
+
+# Create efficient DataLoaders grouped by channel count
+dataloaders = create_grouped_chammi_dataloaders(
+    csv_file="path/to/combined_metadata.csv",
+    root_dir="path/to/CHAMMI/",
+    batch_size=32,
+    split='train',
+    augment=True,
+    normalize=True,  # Uses CHAMMI-specific stats
+)
+
+# Train on each channel group separately
+for channel_count in [3, 4, 5]:
+    for batch_images, batch_metadatas, batch_labels in dataloaders[channel_count]:
+        # batch_images: (batch_size, channel_count, 128, 128)
+        outputs = model(batch_images, num_channels=channel_count)
+        # ... training code ...
+```
+
+### Features
+
+- ✅ Unified dataset class for all three sub-datasets (Allen, HPA, CP)
+- ✅ Variable channel support (3, 4, 5 channels) without padding
+- ✅ Efficient grouped batching for GPU-optimized training
+- ✅ CHAMMI-specific normalization (not ImageNet)
+- ✅ Spatial augmentations only (no color jitter, preserves fluorescence signals)
+- ✅ 128×128 image resize for all samples
+- ✅ Label extraction from enriched metadata
+- ✅ Ready for channel-adaptive ViT training (Early/Late/Hybrid Fusion)
+
+See [`CHAMMI_IMPLEMENTATION_SUMMARY.md`](CHAMMI_IMPLEMENTATION_SUMMARY.md) for comprehensive documentation.

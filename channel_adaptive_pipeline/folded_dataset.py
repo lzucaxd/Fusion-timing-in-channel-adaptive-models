@@ -37,7 +37,7 @@ def fold_channels(image, channel_width, mode="ignore"):
         output = output[:, :, 0:-1]
     elif mode == "apply":
         # Use last channel as a binary mask
-        mask = output["image"][:, :, -1:]
+        mask = output[:, :, -1:]
         output = output[:, :, 0:-1] * mask
 
     return t(output)

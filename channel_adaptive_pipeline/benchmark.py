@@ -2,7 +2,7 @@
 import pandas as pd
 import os
 import json
-from morphem.evaluation import evaluate, create_umap
+from channel_adaptive_pipeline.evaluation import evaluate, create_umap
 
 import warnings
 warnings.filterwarnings("ignore")
