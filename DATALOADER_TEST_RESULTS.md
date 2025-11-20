@@ -130,11 +130,6 @@ All dataloaders are working correctly with proper batch shapes and normalization
 
 ## Recommendations
 
-**For Training:** Use **Grouped DataLoaders** (`create_grouped_chammi_dataloaders`)
-- Most efficient (true batching)
-- Consistent channel counts per batch
-- Easy to process in training loop
-
 **For Better Generalization:** Use **Dataset-Ordered DataLoader** (`create_dataset_ordered_dataloader`)
 - Shuffles dataset order each epoch
 - Prevents overfitting to specific dataset order
