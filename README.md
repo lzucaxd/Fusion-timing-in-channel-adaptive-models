@@ -121,11 +121,15 @@ for epoch in range(num_epochs):
 - ✅ **Label Extraction**: Automatically loads labels from enriched metadata
 - ✅ **128×128 Images**: All images resized to match project requirements
 
-### Efficient Batching
-- ✅ **Grouped DataLoaders**: Separate DataLoaders per channel count (most efficient)
-- ✅ **Dataset-Ordered Training**: Shuffles dataset order each epoch for better generalization
+### Efficient Batching (Main Approach)
+- ✅ **Dataset-Specific DataLoaders**: One DataLoader per dataset (Allen, HPA, CP) with natural channel configuration
+  - Allen: 3 channels, ~31k samples
+  - HPA: 4 channels, ~33k samples
+  - CP: 5 channels, ~36k samples
+- ✅ **Frequent Shuffling**: Shuffles every epoch for variety (enabled by default)
 - ✅ **True Batching**: All samples in batch have same channels → GPU-optimized processing
 - ✅ **No Padding**: Preserves actual channel counts for channel-adaptive models
+- ✅ **Interleaved Option**: Can shuffle dataset order each epoch for better generalization
 
 ### Data Preprocessing
 - ✅ **CHAMMI-Specific Normalization**: Per-channel stats computed from dataset (not ImageNet)
@@ -176,14 +180,24 @@ image, metadata, label = dataset[0]
 
 ### Batch Shapes
 
-**Grouped DataLoaders:**
+**Dataset-Specific DataLoaders (Main Approach):**
 ```python
-# Each batch has consistent channels
-batch_images.shape = (batch_size, channel_count, 128, 128)
-# Examples:
-#   (32, 3, 128, 128) for 3-channel batch
-#   (32, 4, 128, 128) for 4-channel batch  
-#   (32, 5, 128, 128) for 5-channel batch
+# Each dataset has its natural channel configuration
+dataloaders = create_dataset_specific_dataloaders(...)
+
+# Allen DataLoader: all batches have 3 channels
+batch_images.shape = (batch_size, 3, 128, 128)  # Allen
+
+# HPA DataLoader: all batches have 4 channels
+batch_images.shape = (batch_size, 4, 128, 128)  # HPA
+
+# CP DataLoader: all batches have 5 channels
+batch_images.shape = (batch_size, 5, 128, 128)  # CP
+
+# Examples with batch_size=32:
+#   Allen: (32, 3, 128, 128)
+#   HPA:   (32, 4, 128, 128)
+#   CP:    (32, 5, 128, 128)
 ```
 
 ## Testing
