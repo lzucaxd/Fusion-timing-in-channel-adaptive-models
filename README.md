@@ -45,51 +45,53 @@ pip install -e .
 
 ### Training Setup (Main Approach)
 
-**Recommended: One DataLoader per Dataset with Frequent Shuffling**
+**Recommended: Randomly Interleave Batches from All Datasets**
 
 Each dataset (Allen, HPA, CP) has its natural channel configuration:
 - **Allen**: 3 channels (~31k samples)
 - **HPA**: 4 channels (~33k samples)
 - **CP**: 5 channels (~36k samples)
 
+**Key idea**: Randomly sample which dataset to get the next batch from. This prevents the model from learning a fixed dataset ordering and makes it more robust.
+
 ```python
-from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_specific_dataloaders
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_ordered_training_iterator
 
-# Create one DataLoader per dataset (Allen, HPA, CP)
-dataloaders = create_dataset_specific_dataloaders(
-    csv_file="path/to/CHAMMI/combined_metadata.csv",
-    root_dir="path/to/CHAMMI/",
-    batch_size=32,
-    shuffle=True,  # Shuffles every epoch for variety
-    target_labels='Label',  # From enriched_meta.csv
-    split='train',  # ~100k training samples
-    augment=True,  # RandomResizedCrop, flips (no color jitter)
-    normalize=True,  # Uses CHAMMI-specific per-channel stats
-)
-
-# Training loop - process each dataset separately
+# Training loop - batches randomly interleaved from all datasets
 for epoch in range(num_epochs):
-    # Process each dataset
-    for dataset_name in ['Allen', 'HPA', 'CP']:
-        dataloader = dataloaders[dataset_name]
+    # Create iterator for this epoch (will randomly interleave datasets)
+    iterator = create_dataset_ordered_training_iterator(
+        csv_file="path/to/CHAMMI/combined_metadata.csv",
+        root_dir="path/to/CHAMMI/",
+        batch_size=32,
+        shuffle=True,  # Shuffles samples within each dataset
+        target_labels='Label',  # From enriched_meta.csv
+        split='train',  # ~100k training samples
+        augment=True,  # RandomResizedCrop, flips (no color jitter)
+        normalize=True,  # Uses CHAMMI-specific per-channel stats
+        shuffle_dataset_order=True,  # Randomly samples which dataset per batch
+    )
+    
+    # Process all batches (randomly interleaved from all datasets)
+    for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
+        # Each batch is from one dataset with consistent channels
+        # Batches are randomly interleaved: CP → Allen → HPA → CP → ...
         
-        # Each dataset has its natural channel configuration
-        channel_count = 3 if dataset_name == 'Allen' else 4 if dataset_name == 'HPA' else 5
+        channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
         
-        for batch_images, batch_metadatas, batch_labels in dataloader:
-            # batch_images shape: (batch_size, channel_count, 128, 128)
-            # All samples from same dataset with same channels → efficient batching!
-            
-            # Your channel-adaptive ViT forward pass
-            outputs = model(batch_images, num_channels=channel_count)
-            
-            # Loss (supervised classification or ProxyNCA++)
-            loss = criterion(outputs, batch_labels)
-            
-            # Backward pass
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
+        # Your channel-adaptive ViT forward pass
+        outputs = model(batch_images, num_channels=channel_count)
+        
+        # Loss (supervised classification or ProxyNCA++)
+        loss = criterion(outputs, batch_labels)
+        
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    
+    # Iterator automatically stops after one epoch
+    # Next epoch will create a new iterator with different random interleaving
 ```
 
 ### Alternative: Interleaved with Shuffled Dataset Order
@@ -136,10 +138,13 @@ for epoch in range(num_epochs):
   - Allen: 3 channels, ~31k samples
   - HPA: 4 channels, ~33k samples
   - CP: 5 channels, ~36k samples
-- ✅ **Frequent Shuffling**: Shuffles every epoch for variety (enabled by default)
+- ✅ **Random Batch Interleaving**: Randomly sample which dataset to get next batch from
+  - Prevents model from learning fixed dataset ordering
+  - Makes model more robust to dataset sequence patterns
+  - Example: CP → Allen → HPA → CP → Allen → ...
+- ✅ **Frequent Shuffling**: Shuffles samples within each dataset every epoch (enabled by default)
 - ✅ **True Batching**: All samples in batch have same channels → GPU-optimized processing
 - ✅ **No Padding**: Preserves actual channel counts for channel-adaptive models
-- ✅ **Interleaved Option**: Can shuffle dataset order each epoch for better generalization
 
 ### Data Preprocessing
 - ✅ **CHAMMI-Specific Normalization**: Per-channel stats computed from dataset (not ImageNet)

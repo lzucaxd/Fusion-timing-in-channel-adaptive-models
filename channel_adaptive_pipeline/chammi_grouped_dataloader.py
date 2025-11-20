@@ -446,7 +446,7 @@ def create_dataset_specific_dataloaders(
     return dataloaders
 
 
-def create_interleaved_dataset_dataloader(
+def create_dataset_ordered_training_iterator(
     csv_file: str,
     root_dir: str,
     batch_size: int = 32,
@@ -463,13 +463,54 @@ def create_interleaved_dataset_dataloader(
     shuffle_dataset_order: bool = True,
 ) -> Iterator[Tuple[torch.Tensor, List[Dict], List, str]]:
     """
-    Create a DataLoader that interleaves datasets in different orders each epoch.
-    One DataLoader per dataset, shuffled order for better generalization.
+    Create a training iterator that randomly interleaves batches from different datasets.
+    
+    This is the main training approach:
+    - One DataLoader per dataset (Allen, HPA, CP)
+    - Randomly sample which dataset to get next batch from
+    - Mix batches from all datasets to prevent model from learning ordering
+    - Shuffle dataset order for batches each epoch for robustness
+    
+    Example batches in one epoch:
+        Batch 1: HPA   (4ch)  - randomly sampled
+        Batch 2: Allen (3ch)  - randomly sampled
+        Batch 3: CP    (5ch)  - randomly sampled
+        Batch 4: Allen (3ch)  - randomly sampled
+        Batch 5: HPA   (4ch)  - randomly sampled
+        ... continues until all samples processed
+    
+    This prevents the model from learning a fixed dataset ordering and makes it more robust.
     
     Yields:
         (batch_images, batch_metadatas, batch_labels, dataset_source)
         - batch_images: tensor of shape (batch_size, C, H, W) where C is dataset-specific
         - dataset_source: 'Allen' (3ch), 'HPA' (4ch), or 'CP' (5ch)
+    
+    Usage:
+        for epoch in range(num_epochs):
+            # Create iterator for this epoch (will randomly interleave datasets)
+            iterator = create_dataset_ordered_training_iterator(
+                csv_file="...",
+                root_dir="...",
+                batch_size=32,
+                shuffle=True,  # Shuffles samples within each dataset
+                split='train',
+                augment=True,
+                normalize=True,
+                shuffle_dataset_order=True,  # Randomly samples which dataset per batch
+            )
+            
+            # Process all batches (randomly interleaved from all datasets)
+            for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
+                channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
+                outputs = model(batch_images, num_channels=channel_count)
+                loss = criterion(outputs, batch_labels)
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+            
+            # Iterator automatically stops after one epoch
+            # Next epoch will create a new iterator with different random interleaving
     """
     # Create dataset-specific dataloaders
     dataset_dataloaders = create_dataset_specific_dataloaders(
@@ -491,37 +532,94 @@ def create_interleaved_dataset_dataloader(
     
     dataset_names = ['Allen', 'HPA', 'CP']
     
-    # Create iterators and yield batches in shuffled dataset order
-    while True:
-        # Determine dataset order for this epoch
+    # Create iterators for each dataset
+    iterators = {}
+    dataset_batch_counts = {}  # Track how many batches each dataset has yielded
+    dataset_total_batches = {}  # Total batches per dataset
+    
+    for dataset_name in dataset_names:
+        if dataset_name in dataset_dataloaders:
+            dataloader = dataset_dataloaders[dataset_name]
+            iterators[dataset_name] = iter(dataloader)
+            # Count total batches for this dataset
+            dataset_total_batches[dataset_name] = len(dataloader)
+            dataset_batch_counts[dataset_name] = 0
+    
+    # Randomly sample which dataset to get next batch from
+    # Continue until all datasets are exhausted (one epoch complete)
+    exhausted_datasets = set()
+    
+    while len(exhausted_datasets) < len(iterators):
+        # Get list of datasets that haven't been exhausted
+        available = [d for d in dataset_names if d in iterators and d not in exhausted_datasets]
+        
+        if not available:
+            break
+        
+        # Randomly sample which dataset to use for this batch
         if shuffle_dataset_order:
-            epoch_dataset_order = random.sample(dataset_names, len(dataset_names))
+            dataset_source = random.choice(available)
         else:
-            epoch_dataset_order = dataset_names
+            # Cycle through in fixed order
+            cycle_idx = sum(dataset_batch_counts[d] for d in dataset_names if d in available) % len(available)
+            dataset_source = available[cycle_idx]
         
-        # Create iterators for this epoch
-        iterators = {name: iter(dl) for name, dl in dataset_dataloaders.items()}
-        
-        # Interleave batches from different datasets in shuffled order
-        exhausted = False
-        
-        while not exhausted:
-            exhausted = True
-            for dataset_source in epoch_dataset_order:
-                if dataset_source in iterators:
-                    try:
-                        batch_images, batch_metadatas, batch_labels = next(iterators[dataset_source])
-                        yield batch_images, batch_metadatas, batch_labels, dataset_source
-                        exhausted = False
-                    except StopIteration:
-                        # Restart this iterator for next epoch
-                        iterators[dataset_source] = iter(dataset_dataloaders[dataset_source])
-                        try:
-                            batch_images, batch_metadatas, batch_labels = next(iterators[dataset_source])
-                            yield batch_images, batch_metadatas, batch_labels, dataset_source
-                            exhausted = False
-                        except StopIteration:
-                            pass
+        # Get next batch from selected dataset
+        try:
+            batch_images, batch_metadatas, batch_labels = next(iterators[dataset_source])
+            dataset_batch_counts[dataset_source] += 1
+            yield batch_images, batch_metadatas, batch_labels, dataset_source
+            
+            # Check if this dataset is exhausted
+            if dataset_batch_counts[dataset_source] >= dataset_total_batches[dataset_source]:
+                exhausted_datasets.add(dataset_source)
+        except StopIteration:
+            exhausted_datasets.add(dataset_source)
+
+
+def create_interleaved_dataset_dataloader(
+    csv_file: str,
+    root_dir: str,
+    batch_size: int = 32,
+    shuffle: bool = True,
+    target_labels: Optional[Union[str, List[str]]] = None,
+    split: Optional[str] = None,
+    resize_to: int = 128,
+    augment: bool = False,
+    normalize: bool = True,
+    mean: Optional[List[float]] = None,
+    std: Optional[List[float]] = None,
+    num_workers: int = 4,
+    pin_memory: bool = True,
+    shuffle_dataset_order: bool = True,
+) -> Iterator[Tuple[torch.Tensor, List[Dict], List, str]]:
+    """
+    [DEPRECATED - use create_dataset_ordered_training_iterator instead]
+    Create a DataLoader that interleaves datasets in different orders each epoch.
+    One DataLoader per dataset, shuffled order for better generalization.
+    
+    Yields:
+        (batch_images, batch_metadatas, batch_labels, dataset_source)
+        - batch_images: tensor of shape (batch_size, C, H, W) where C is dataset-specific
+        - dataset_source: 'Allen' (3ch), 'HPA' (4ch), or 'CP' (5ch)
+    """
+    # For backwards compatibility, delegate to the new function
+    return create_dataset_ordered_training_iterator(
+        csv_file=csv_file,
+        root_dir=root_dir,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        target_labels=target_labels,
+        split=split,
+        resize_to=resize_to,
+        augment=augment,
+        normalize=normalize,
+        mean=mean,
+        std=std,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        shuffle_dataset_order=shuffle_dataset_order,
+    )
 
 
 if __name__ == "__main__":
@@ -591,10 +689,11 @@ if __name__ == "__main__":
         print(f"  All same channels: ✓")
         print(f"  All same dataset: ✓")
     
-    print("\n\nOption 4: Interleaved Dataset DataLoader (shuffles dataset order each epoch)")
+    print("\n\nOption 4: Dataset-Ordered Training Iterator (MAIN APPROACH)")
     print("=" * 70)
+    print("Processes one complete dataset at a time, with shuffled order each epoch")
     
-    interleaved = create_interleaved_dataset_dataloader(
+    iterator = create_dataset_ordered_training_iterator(
         csv_file=csv_file,
         root_dir=chammi_root,
         batch_size=32,
@@ -603,15 +702,28 @@ if __name__ == "__main__":
         shuffle_dataset_order=True,
     )
     
-    print("\nTesting interleaved dataset DataLoader (first 6 batches):")
-    for i, (batch_images, batch_metadatas, batch_labels, dataset_source) in enumerate(interleaved):
-        if i >= 6:
+    print("\nTesting dataset-ordered training iterator (first epoch - 10 batches):")
+    current_dataset = None
+    batch_count = 0
+    datasets_processed = []
+    
+    for i, (batch_images, batch_metadatas, batch_labels, dataset_source) in enumerate(iterator):
+        if i >= 10:
             break
+        
+        # Track when we switch datasets
+        if dataset_source != current_dataset:
+            if current_dataset is not None:
+                print(f"\n  Finished processing {current_dataset} dataset")
+            current_dataset = dataset_source
+            if dataset_source not in datasets_processed:
+                datasets_processed.append(dataset_source)
+                print(f"\n  Starting {dataset_source} dataset (all batches from this dataset):")
+        
+        batch_count += 1
         channel_count = batch_metadatas[0]['num_channels']
-        print(f"\nBatch {i+1}:")
-        print(f"  Dataset: {dataset_source}")
-        print(f"  Channel count: {channel_count}")
-        print(f"  Batch shape: {batch_images.shape}")
-        print(f"  All same channels: ✓")
-        print(f"  All same dataset: ✓")
+        print(f"    Batch {batch_count} from {dataset_source}: shape={batch_images.shape}, channels={channel_count}")
+    
+    print(f"\n  Dataset order for this epoch: {' → '.join(datasets_processed)}")
+    print("  Next epoch will use a different shuffled order")
 
