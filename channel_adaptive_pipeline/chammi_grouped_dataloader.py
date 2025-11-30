@@ -11,6 +11,33 @@ from typing import Dict, List, Optional, Union, Iterator, Tuple
 from channel_adaptive_pipeline.chammi_dataset import CHAMMIDataset, CHAMMITransform, create_chammi_dataloader
 
 
+class TransformWrapper(Dataset):
+    """Wrapper to apply transforms to a subset dataset."""
+    def __init__(self, subset, transform):
+        self.subset = subset
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.subset)
+    
+    def __getitem__(self, idx):
+        image, metadata, labels = self.subset[idx]
+        if self.transform:
+            image = self.transform(image)
+        return image, metadata, labels if labels is not None else []
+
+
+def _collate_fn_grouped(batch):
+    """Collate function for grouped dataloaders."""
+    images, metadatas, labels = zip(*batch)
+    # Images can now be stacked since all have same channels!
+    batch_images = torch.stack(images)
+    batch_metadatas = list(metadatas)
+    # Handle labels - convert None to empty list
+    batch_labels = [label if label is not None else None for label in labels]
+    return batch_images, batch_metadatas, batch_labels
+
+
 def create_grouped_chammi_dataloaders(
     csv_file: str,
     root_dir: str,
@@ -71,32 +98,7 @@ def create_grouped_chammi_dataloaders(
         subset_dataset = torch.utils.data.Subset(base_dataset, indices)
         
         # Apply transform wrapper
-        class TransformWrapper(Dataset):
-            def __init__(self, subset, transform):
-                self.subset = subset
-                self.transform = transform
-            
-            def __len__(self):
-                return len(self.subset)
-            
-            def __getitem__(self, idx):
-                image, metadata, labels = self.subset[idx]
-                if self.transform:
-                    image = self.transform(image)
-                # Return tuple - DataLoader will handle collation
-                return image, metadata, labels if labels is not None else []
-        
         transformed_dataset = TransformWrapper(subset_dataset, transform)
-        
-        # Custom collate to handle metadata dicts and None labels
-        def collate_fn(batch):
-            images, metadatas, labels = zip(*batch)
-            # Images can now be stacked since all have same channels!
-            batch_images = torch.stack(images)
-            batch_metadatas = list(metadatas)
-            # Handle labels - convert None to empty list
-            batch_labels = [label if label is not None else None for label in labels]
-            return batch_images, batch_metadatas, batch_labels
         
         # Create DataLoader - can now stack normally since all have same channels
         dataloader = DataLoader(
@@ -105,7 +107,7 @@ def create_grouped_chammi_dataloaders(
             shuffle=shuffle,
             num_workers=num_workers,
             pin_memory=pin_memory,
-            collate_fn=collate_fn,
+            collate_fn=_collate_fn_grouped,
         )
         
         dataloaders[num_channels] = dataloader
@@ -248,28 +250,7 @@ def create_dataset_ordered_dataloader(
         
         subset_dataset = torch.utils.data.Subset(base_dataset, indices)
         
-        class TransformWrapper(Dataset):
-            def __init__(self, subset, transform):
-                self.subset = subset
-                self.transform = transform
-            
-            def __len__(self):
-                return len(self.subset)
-            
-            def __getitem__(self, idx):
-                image, metadata, labels = self.subset[idx]
-                if self.transform:
-                    image = self.transform(image)
-                return image, metadata, labels
-        
         transformed_dataset = TransformWrapper(subset_dataset, transform)
-        
-        def collate_fn(batch):
-            images, metadatas, labels = zip(*batch)
-            batch_images = torch.stack(images)
-            batch_metadatas = list(metadatas)
-            batch_labels = [label if label is not None else None for label in labels]
-            return batch_images, batch_metadatas, batch_labels
         
         dataloader = DataLoader(
             transformed_dataset,
@@ -277,7 +258,7 @@ def create_dataset_ordered_dataloader(
             shuffle=shuffle,
             num_workers=num_workers,
             pin_memory=pin_memory,
-            collate_fn=collate_fn,
+            collate_fn=_collate_fn_grouped,
         )
         
         dataloaders_by_group[(num_channels, dataset_source)] = dataloader

@@ -35,3 +35,12 @@ env/
 .venv
 .env
 
+# Model checkpoints and training outputs (should not be in repo)
+checkpoints/
+logs/
+results/
+*.pth
+*.pt
+evaluation_output.log
+*.log
+

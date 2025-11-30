@@ -52,19 +52,18 @@ class CHAMMIDataset(Dataset):
         self.target_labels = target_labels
         self.resize_to = resize_to
         
+        # Store split for later filtering (after enriched metadata is loaded)
+        self.split = split
+        
+        # Load enriched metadata files for labels (needed for OOD split detection)
+        self._load_enriched_metadata()
+        
         # Filter by split if specified
         if split is not None:
-            split_lower = split.lower()
-            if split_lower == 'train':
-                self.metadata = self.metadata[self.metadata['train_test_split'] == 'train']
-            elif split_lower == 'test':
-                self.metadata = self.metadata[self.metadata['train_test_split'] == 'test']
+            self._filter_by_split(split)
         
         # Reset index after filtering
         self.metadata = self.metadata.reset_index(drop=True)
-        
-        # Load enriched metadata files for labels
-        self._load_enriched_metadata()
         
     def _load_enriched_metadata(self):
         """Load enriched metadata from each sub-dataset for label information."""
@@ -84,6 +83,90 @@ class CHAMMIDataset(Dataset):
         cp_meta_path = os.path.join(self.root_dir, 'CP', 'enriched_meta.csv')
         if os.path.exists(cp_meta_path):
             self.enriched_meta['CP'] = pd.read_csv(cp_meta_path)
+    
+    def _get_ood_split_columns(self) -> Dict[str, List[str]]:
+        """
+        Detect OOD split columns in enriched metadata files.
+        
+        Returns:
+            Dict mapping dataset_source -> list of OOD split column names
+        """
+        ood_columns = {}
+        for dataset_source, enriched_df in self.enriched_meta.items():
+            # Look for columns that might indicate OOD splits
+            # Common patterns: 'ood_val', 'ood_test', 'Task_one', 'Task_two', etc.
+            potential_ood_cols = []
+            for col in enriched_df.columns:
+                col_lower = col.lower()
+                if any(keyword in col_lower for keyword in ['ood', 'task_', 'split']):
+                    # Check if it's a boolean column or contains split information
+                    if enriched_df[col].dtype == bool or col_lower in ['ood_val', 'ood_test', 'val', 'test']:
+                        potential_ood_cols.append(col)
+            ood_columns[dataset_source] = potential_ood_cols
+        return ood_columns
+    
+    def _filter_by_split(self, split: str):
+        """
+        Filter metadata by split (train/test or OOD split name).
+        
+        Args:
+            split: Split name ('train', 'test', or OOD split name like 'ood_val', 'ood_test')
+        """
+        split_lower = split.lower()
+        
+        # Standard splits from combined_metadata.csv
+        if split_lower == 'train':
+            self.metadata = self.metadata[self.metadata['train_test_split'] == 'train']
+        elif split_lower == 'test':
+            self.metadata = self.metadata[self.metadata['train_test_split'] == 'test']
+        elif split_lower == 'val':
+            # If 'val' split exists in train_test_split column
+            if 'val' in self.metadata['train_test_split'].values:
+                self.metadata = self.metadata[self.metadata['train_test_split'] == 'val']
+            else:
+                # Fallback: use test as validation
+                self.metadata = self.metadata[self.metadata['train_test_split'] == 'test']
+        else:
+            # OOD split - filter based on enriched metadata
+            # This requires matching metadata rows with enriched metadata
+            ood_columns = self._get_ood_split_columns()
+            
+            # Create a mask for rows that match the OOD split
+            mask = pd.Series([False] * len(self.metadata), index=self.metadata.index)
+            
+            for idx, row in self.metadata.iterrows():
+                dataset_source = self._get_dataset_source(row['file_path'])
+                
+                if dataset_source in self.enriched_meta:
+                    enriched_df = self.enriched_meta[dataset_source]
+                    
+                    # Match by ID or Key
+                    if dataset_source == 'CP':
+                        match_col = 'Key'
+                        match_val = row['ID']
+                    else:
+                        match_col = 'ID'
+                        match_val = row['ID']
+                    
+                    matched_rows = enriched_df[enriched_df[match_col] == match_val]
+                    
+                    if len(matched_rows) == 0:
+                        # Fallback: try matching by file_path
+                        matched_rows = enriched_df[enriched_df['file_path'] == row['file_path']]
+                    
+                    if len(matched_rows) > 0:
+                        enriched_row = matched_rows.iloc[0]
+                        
+                        # Check if this split column exists and is True
+                        if split in enriched_row.index:
+                            if pd.notna(enriched_row[split]) and enriched_row[split] == True:
+                                mask.iloc[idx] = True
+                        # Also check for lowercase version
+                        elif split_lower in enriched_row.index:
+                            if pd.notna(enriched_row[split_lower]) and enriched_row[split_lower] == True:
+                                mask.iloc[idx] = True
+            
+            self.metadata = self.metadata[mask]
     
     def __len__(self):
         return len(self.metadata)
