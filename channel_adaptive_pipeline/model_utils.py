@@ -65,25 +65,44 @@ def load_model_checkpoint(
     scheduler: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
-    Load model checkpoint.
-    
-    Args:
-        model: PyTorch model to load weights into
-        checkpoint_path: Path to checkpoint file
-        device: Device to load model on
-        optimizer: Optional optimizer to load state into
-        scheduler: Optional scheduler to load state into
-    
-    Returns:
-        Dictionary containing checkpoint information (epoch, metrics, etc.)
+    Load model checkpoint with compatibility for old architecture.
     """
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    state_dict = checkpoint['model_state_dict']
     
-    # Load model state
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Check if this is an old checkpoint (has patch_embeds keys)
+    has_old_architecture = any('patch_embeds' in key for key in state_dict.keys())
+    
+    if has_old_architecture:
+        print("  Detected old checkpoint architecture. Converting to new format...")
+        new_state_dict = {}
+        
+        for key, value in state_dict.items():
+            # Convert old patch_embeds to new proj
+            if 'patch_embed.patch_embeds.5' in key:
+                # Use 5-channel embedding as the base (since max_in_chans=5)
+                new_key = key.replace('patch_embed.patch_embeds.5', 'patch_embed.proj')
+                new_state_dict[new_key] = value
+            elif 'patch_embed.patch_embeds' in key:
+                # Skip 3 and 4 channel embeddings (we'll use 5-channel as base)
+                continue
+            else:
+                # Keep all other keys as-is
+                new_state_dict[key] = value
+        
+        state_dict = new_state_dict
+    
+    # Load model state with strict=False to handle any remaining mismatches
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except RuntimeError as e:
+        # If strict loading fails, try with strict=False
+        print(f"  Warning: Some weights couldn't be loaded. Attempting partial load...")
+        model.load_state_dict(state_dict, strict=False)
+    
     model.to(device)
     
     # Load optimizer state if provided

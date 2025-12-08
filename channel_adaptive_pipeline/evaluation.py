@@ -278,7 +278,7 @@ def evaluate_model_on_dataloaders(
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
                 # Forward pass
-                logits = model(batch_images, num_channels=channel_count)
+                logits = model(batch_images)
                 predictions = torch.argmax(logits, dim=1)
                 
                 all_predictions.extend(predictions.cpu().numpy())
@@ -445,7 +445,7 @@ def evaluate_per_dataset(
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
                 # Forward pass
-                logits = model(batch_images, num_channels=channel_count)
+                logits = model(batch_images)
                 predictions = torch.argmax(logits, dim=1)
                 
                 # Group by dataset source

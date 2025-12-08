@@ -1,0 +1,161 @@
+Enhanced Evaluation Results - Early Fusion ViT (Epoch 15)
+================================================================================
+
+Using device: cpu
+
+Creating label encoder...
+Total unique labels: 20
+
+Loading checkpoint: ./checkpoints/early_fusion_vit_tiny_epoch_15_best.pth
+  Detected old checkpoint architecture. Converting to new format...
+  Warning: Some weights couldn't be loaded. Attempting partial load...
+Loaded model from epoch 14
+
+======================================================================
+EXTRACTING EMBEDDINGS
+======================================================================
+
+  Dataset: Allen
+      Extracting embeddings for Allen...
+      Saved embeddings to evaluation_outputs_early_fusion/embeddings_Allen.pkl
+
+  Dataset: HPA
+      Extracting embeddings for HPA...
+      Saved embeddings to evaluation_outputs_early_fusion/embeddings_HPA.pkl
+
+  Dataset: CP
+      Extracting embeddings for CP...
+      Saved embeddings to evaluation_outputs_early_fusion/embeddings_CP.pkl
+
+======================================================================
+EVALUATING PER TASK
+======================================================================
+
+  Dataset: Allen
+      Loaded 65103 embeddings
+
+      Task: Task_one
+        Train samples: 52082, Test samples: 13021
+        Standard 1-NN - Accuracy: 0.9531, Macro-F1: 0.4425
+      Computing UMAP (metric=cosine) for Early Fusion ViT - Allen_Task_one...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_Allen_Task_one.png
+      Computing t-SNE for Early Fusion ViT - Allen_Task_one...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_Allen_Task_one.png
+
+      Task: Task_two
+        Train samples: 52082, Test samples: 13021
+        Standard 1-NN - Accuracy: 0.9384, Macro-F1: 0.3383
+      Computing UMAP (metric=cosine) for Early Fusion ViT - Allen_Task_two...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_Allen_Task_two.png
+      Computing t-SNE for Early Fusion ViT - Allen_Task_two...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_Allen_Task_two.png
+
+  Dataset: HPA
+      Loaded 66936 embeddings
+
+      Task: Task_one
+        Train samples: 53548, Test samples: 13388
+        Standard 1-NN - Accuracy: 0.5549, Macro-F1: 0.5561
+      Computing UMAP (metric=cosine) for Early Fusion ViT - HPA_Task_one...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_HPA_Task_one.png
+      Computing t-SNE for Early Fusion ViT - HPA_Task_one...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_HPA_Task_one.png
+
+      Task: Task_two
+        Train samples: 53548, Test samples: 13388
+        Standard 1-NN - Accuracy: 0.5272, Macro-F1: 0.4967
+      Computing UMAP (metric=cosine) for Early Fusion ViT - HPA_Task_two...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_HPA_Task_two.png
+      Computing t-SNE for Early Fusion ViT - HPA_Task_two...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_HPA_Task_two.png
+
+      Task: Task_three
+        Train samples: 53548, Test samples: 13388
+        Standard 1-NN - Accuracy: 0.3337, Macro-F1: 0.1918
+      Computing UMAP (metric=cosine) for Early Fusion ViT - HPA_Task_three...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_HPA_Task_three.png
+      Computing t-SNE for Early Fusion ViT - HPA_Task_three...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_HPA_Task_three.png
+
+  Dataset: CP
+      Loaded 88245 embeddings
+
+      Task: Task_one
+        Train samples: 70596, Test samples: 17649
+        Standard 1-NN - Accuracy: 0.4026, Macro-F1: 0.4044
+      Computing UMAP (metric=cosine) for Early Fusion ViT - CP_Task_one...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_CP_Task_one.png
+      Computing t-SNE for Early Fusion ViT - CP_Task_one...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_CP_Task_one.png
+
+      Task: Task_two
+        Train samples: 70596, Test samples: 17649
+        Standard 1-NN - Accuracy: 0.4234, Macro-F1: 0.3271
+      Computing UMAP (metric=cosine) for Early Fusion ViT - CP_Task_two...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_CP_Task_two.png
+      Computing t-SNE for Early Fusion ViT - CP_Task_two...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_CP_Task_two.png
+
+      Task: Task_three
+        Train samples: 70596, Test samples: 17649
+        Standard 1-NN - Accuracy: 0.3003, Macro-F1: 0.2452
+      Computing UMAP (metric=cosine) for Early Fusion ViT - CP_Task_three...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_CP_Task_three.png
+      Computing t-SNE for Early Fusion ViT - CP_Task_three...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_CP_Task_three.png
+
+      Task: Task_four
+        Train samples: 70596, Test samples: 12350
+        Leave-one-out - Accuracy: 0.2252, Macro-F1: 0.1392
+      Computing UMAP (metric=cosine) for Early Fusion ViT - CP_Task_four...
+      Saved UMAP to evaluation_outputs_early_fusion/umaps/umap_CP_Task_four.png
+      Computing t-SNE for Early Fusion ViT - CP_Task_four...
+      Saved t-SNE to evaluation_outputs_early_fusion/tsne/tsne_CP_Task_four.png
+
+======================================================================
+RESULTS SUMMARY
+======================================================================
+
+Allen:
+Task            Accuracy     Macro-F1    
+----------------------------------------
+Task_one        0.9531       0.4425      
+Task_two        0.9384       0.3383      
+
+HPA:
+Task            Accuracy     Macro-F1    
+----------------------------------------
+Task_one        0.5549       0.5561      
+Task_two        0.5272       0.4967      
+Task_three      0.3337       0.1918      
+
+CP:
+Task            Accuracy     Macro-F1    
+----------------------------------------
+Task_one        0.4026       0.4044      
+Task_two        0.4234       0.3271      
+Task_three      0.3003       0.2452      
+Task_four       0.2252       0.1392      
+
+======================================================================
+OVERALL AVERAGES
+======================================================================
+Overall:    Acc=0.5176, F1=0.3490
+
+Results saved to: evaluation_outputs_early_fusion
+UMAPs saved to: evaluation_outputs_early_fusion/umaps
+t-SNE plots saved to: evaluation_outputs_early_fusion/tsne
+
+======================================================================
+EVALUATION COMPLETE
+======================================================================
+
+Model: Early Fusion ViT Tiny (Epoch 15 Best)
+Checkpoint: ./checkpoints/early_fusion_vit_tiny_epoch_15_best.pth
+Date: Evaluation completed successfully
+
+Key Findings:
+- Allen dataset performs best (Task_one: 95.31%, Task_two: 93.84%)
+- HPA dataset shows moderate performance (Task_one: 55.49%, Task_two: 52.72%)
+- CP dataset shows lower performance, especially on novel class tasks
+- Overall accuracy: 51.76%, Overall Macro-F1: 34.90%

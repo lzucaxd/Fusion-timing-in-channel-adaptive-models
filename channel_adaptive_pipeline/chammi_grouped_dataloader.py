@@ -484,7 +484,7 @@ def create_dataset_ordered_training_iterator(
             # Process all batches (randomly interleaved from all datasets)
             for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
                 channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
-                outputs = model(batch_images, num_channels=channel_count)
+                outputs = model(batch_images)
                 loss = criterion(outputs, batch_labels)
                 loss.backward()
                 optimizer.step()

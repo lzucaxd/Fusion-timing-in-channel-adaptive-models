@@ -60,7 +60,7 @@ def compute_channel_importance(
                 else:
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
-                logits = model(batch_images, num_channels=channel_count)
+                logits = model(batch_images)
                 predictions = torch.argmax(logits, dim=1)
                 
                 baseline_predictions.extend(predictions.cpu().numpy())
@@ -96,7 +96,7 @@ def compute_channel_importance(
                     else:
                         batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                     
-                    logits = model(batch_images, num_channels=channel_count)
+                    logits = model(batch_images)
                     predictions = torch.argmax(logits, dim=1)
                     
                     ablated_predictions.extend(predictions.cpu().numpy())

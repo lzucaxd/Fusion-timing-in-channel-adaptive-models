@@ -51,7 +51,7 @@ def evaluate_baseline(
             
             # Forward pass
             num_channels = batch_images.size(1)
-            logits = model(batch_images, num_channels=num_channels)
+            logits = model(batch_images)
             predictions = torch.argmax(logits, dim=1)
             
             all_predictions.extend(predictions.cpu().numpy())
@@ -121,7 +121,7 @@ def evaluate_missing_channels(
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
                 # Forward pass
-                logits = model(batch_images, num_channels=num_channels)
+                logits = model(batch_images)
                 predictions = torch.argmax(logits, dim=1)
                 
                 all_predictions.extend(predictions.cpu().numpy())
@@ -203,7 +203,7 @@ def evaluate_shuffled_channels(
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
                 # Forward pass
-                logits = model(batch_images, num_channels=num_channels)
+                logits = model(batch_images)
                 predictions = torch.argmax(logits, dim=1)
                 
                 all_predictions.extend(predictions.cpu().numpy())

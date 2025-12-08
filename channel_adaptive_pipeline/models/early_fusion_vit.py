@@ -175,24 +175,20 @@ class EarlyFusionViT(nn.Module):
         nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
     
-    def forward(self, x: torch.Tensor, num_channels: Optional[int] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass.
         
         Args:
             x: Input tensor of shape (B, C, H, W) where C ∈ {3, 4, 5}
-            num_channels: Optional channel count (inferred from x if not provided)
         
         Returns:
             Logits of shape (B, num_classes)
         """
         B, C, H, W = x.shape
         
-        if num_channels is None:
-            num_channels = C
-        
-        if num_channels not in [3, 4, 5]:
-            raise ValueError(f"Unsupported channel count: {num_channels}. Expected 3, 4, or 5.")
+        if C not in [3, 4, 5]:
+            raise ValueError(f"Unsupported channel count: {C}. Expected 3, 4, or 5.")
         
         # Patch embedding: (B, C, H, W) -> (B, num_patches, embed_dim)
         x = self.patch_embed(x)
@@ -219,21 +215,46 @@ class EarlyFusionViT(nn.Module):
         
         return logits
     
-    def get_attention_maps(self, x: torch.Tensor, num_channels: Optional[int] = None):
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Extract features before classification head.
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W) where C ∈ {3, 4, 5}
+        
+        Returns:
+            Features of shape (B, embed_dim) - class token after norm layer
+        """
+        B, C, H, W = x.shape
+        
+        if C not in [3, 4, 5]:
+            raise ValueError(f"Unsupported channel count: {C}. Expected 3, 4, or 5.")
+        
+        x = self.patch_embed(x)
+        cls_tokens = self.cls_token.expand(B, 1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)
+        x = x + self.pos_embed
+        x = self.pos_drop(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        
+        # Return class token (first token)
+        return x[:, 0]
+    
+    def get_attention_maps(self, x: torch.Tensor):
         """
         Get attention maps for visualization (optional).
         
         Args:
-            x: Input tensor of shape (B, C, H, W)
-            num_channels: Optional channel count
+            x: Input tensor of shape (B, C, H, W) where C ∈ {3, 4, 5}
         
         Returns:
             List of attention maps from each transformer block
         """
         B, C, H, W = x.shape
         
-        if num_channels is None:
-            num_channels = C
+        if C not in [3, 4, 5]:
+            raise ValueError(f"Unsupported channel count: {C}. Expected 3, 4, or 5.")
         
         # Patch embedding
         x = self.patch_embed(x)
