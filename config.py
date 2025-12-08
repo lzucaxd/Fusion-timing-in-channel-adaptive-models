@@ -20,7 +20,7 @@ class Config:
     
     # Training hyperparameters
     batch_size: int = 128  # 128-256 range
-    num_epochs: int = 50
+    num_epochs: int = 20
     learning_rate: float = 3e-4  # Start with 3e-4, adjust to 1e-4 or 5e-4 if needed
     weight_decay: float = 0.01
     label_smoothing: float = 0.1

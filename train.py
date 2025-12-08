@@ -8,6 +8,7 @@ from tqdm import tqdm
 import argparse
 import os
 import sys
+import random
 from typing import Any, Optional
 
 # Disable tqdm's default file writing to ensure proper in-place updates
@@ -27,6 +28,44 @@ from channel_adaptive_pipeline.model_utils import (
 )
 from channel_adaptive_pipeline.logging_utils import Logger, print_metrics
 
+def cleanup_old_runs(config: Config):
+    """Remove existing checkpoints and logs for a fresh start."""
+    import shutil
+    
+    # Remove checkpoints
+    if os.path.exists(config.checkpoint_dir):
+        checkpoint_files = [f for f in os.listdir(config.checkpoint_dir) 
+                           if f.endswith('.pth')]
+        if checkpoint_files:
+            print(f"Removing {len(checkpoint_files)} existing checkpoint(s)...")
+            for f in checkpoint_files:
+                os.remove(os.path.join(config.checkpoint_dir, f))
+            print("Checkpoints cleaned.")
+        else:
+            print("No existing checkpoints found.")
+    else:
+        print("Checkpoint directory doesn't exist yet.")
+    
+    # Remove logs
+    if os.path.exists(config.log_dir):
+        log_files = [f for f in os.listdir(config.log_dir) 
+                     if f.endswith('.csv') or f.endswith('.log')]
+        if log_files:
+            print(f"Removing {len(log_files)} existing log file(s)...")
+            for f in log_files:
+                os.remove(os.path.join(config.log_dir, f))
+            print("Logs cleaned.")
+        else:
+            print("No existing logs found.")
+    else:
+        print("Log directory doesn't exist yet.")
+    
+    # Remove TensorBoard logs
+    tb_log_dir = os.path.join(config.log_dir, config.experiment_name)
+    if os.path.exists(tb_log_dir):
+        print("Removing TensorBoard logs...")
+        shutil.rmtree(tb_log_dir)
+        print("TensorBoard logs cleaned.")
 
 def train_epoch(
     model: nn.Module,
@@ -69,30 +108,48 @@ def train_epoch(
                           4: {'loss': 0.0, 'correct': 0, 'samples': 0},
                           5: {'loss': 0.0, 'correct': 0, 'samples': 0}}
     
-    # Iterate through channel groups
-    channel_counts = sorted(dataloaders.keys())
+    # Option 2: Randomize batch-by-batch - create iterators for each channel group
+    channel_counts = list(dataloaders.keys())
+    iterators = {ch: iter(dl) for ch, dl in dataloaders.items()}
     
-    for channel_count in channel_counts:
+    # Track which channels are exhausted and batch counts
+    exhausted_channels = set()
+    batch_counts = {ch: 0 for ch in channel_counts}
+    total_batches = sum(len(dl) for dl in dataloaders.values())
+    
+    # Create a single progress bar for the entire epoch
+    pbar = tqdm(
+        total=total_batches,
+        desc=f"Epoch {epoch+1}/{config.num_epochs} [Random]",
+        unit="batch",
+        file=sys.stdout,
+        ncols=120,
+        mininterval=1.0,
+        maxinterval=10.0,
+        miniters=10,
+        dynamic_ncols=False,
+        leave=False,
+        smoothing=0.1,
+        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+    )
+    
+    global_batch_idx = 0
+    
+    # Process batches in random order until all channels are exhausted
+    while len(exhausted_channels) < len(channel_counts):
+        # Get available (non-exhausted) channels
+        available_channels = [ch for ch in channel_counts if ch not in exhausted_channels]
+        
+        if not available_channels:
+            break
+        
+        # Randomly select which channel to process next
+        channel_count = random.choice(available_channels)
         dataloader = dataloaders[channel_count]
         
-        # Create progress bar with epoch, channel, and time info
-        # Configure for in-place updates (disable dynamic updates to prevent line spam)
-        pbar = tqdm(
-            dataloader,
-            desc=f"Epoch {epoch+1}/{config.num_epochs} [C={channel_count}]",
-            unit="batch",
-            file=sys.stdout,
-            ncols=120,
-            mininterval=1.0,  # Update at most once per second
-            maxinterval=10.0,
-            miniters=10,  # Update every 10 iterations minimum
-            dynamic_ncols=False,
-            leave=False,
-            smoothing=0.1,  # Smooth the rate calculation
-            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-        )
-        
-        for batch_idx, (batch_images, batch_metadatas, batch_labels) in enumerate(pbar):
+        try:
+            batch_images, batch_metadatas, batch_labels = next(iterators[channel_count])
+            
             # Move to device
             batch_images = batch_images.to(device)
             
@@ -106,7 +163,7 @@ def train_epoch(
                 batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
             
             # Forward pass
-            logits = model(batch_images, num_channels=channel_count)
+            logits = model(batch_images)
             
             # Compute loss
             loss = criterion(logits, batch_labels_tensor)
@@ -129,22 +186,37 @@ def train_epoch(
             metrics_per_channel[channel_count]['correct'] += correct
             metrics_per_channel[channel_count]['samples'] += batch_size
             
-            # Update progress bar with current metrics (only every 10 batches to reduce updates)
-            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(dataloader):
+            batch_counts[channel_count] += 1
+            global_batch_idx += 1
+            
+            # Update progress bar
+            if global_batch_idx % 10 == 0 or global_batch_idx == total_batches:
                 current_loss = total_loss / total_samples
                 current_acc = total_correct / total_samples
-                pbar.set_postfix({'loss': f'{current_loss:.4f}', 'acc': f'{current_acc:.4f}'})
+                pbar.set_postfix({
+                    'loss': f'{current_loss:.4f}',
+                    'acc': f'{current_acc:.4f}',
+                    'C': channel_count
+                })
             
-            # Log metrics periodically (silently, no print)
-            if (batch_idx + 1) % config.log_freq == 0:
-                # Calculate global step across all channel groups
-                batches_before = sum(len(dataloaders[ch]) for ch in channel_counts if ch < channel_count)
-                step = epoch * sum(len(dl) for dl in dataloaders.values()) + batches_before + batch_idx
+            pbar.update(1)
+            
+            # Log metrics periodically
+            if global_batch_idx % config.log_freq == 0:
+                current_loss = total_loss / total_samples
+                current_acc = total_correct / total_samples
+                step = epoch * total_batches + global_batch_idx
                 logger.log({
                     'train_loss': current_loss,
                     'train_acc': current_acc,
                     'lr': config.learning_rate,  # Will be updated after epoch
                 }, step)
+            
+        except StopIteration:
+            # This channel is exhausted
+            exhausted_channels.add(channel_count)
+    
+    pbar.close()
     
     # Compute final metrics
     avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
@@ -207,7 +279,7 @@ def validate(
                     batch_labels_tensor = torch.tensor(batch_labels, dtype=torch.long, device=device)
                 
                 # Forward pass
-                logits = model(batch_images, num_channels=channel_count)
+                logits = model(batch_images)
                 
                 # Compute loss
                 loss = criterion(logits, batch_labels_tensor)
@@ -234,6 +306,7 @@ def main():
     parser = argparse.ArgumentParser(description='Train channel-adaptive ViT model')
     parser.add_argument('--config', type=str, default=None, help='Path to config file (optional)')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--clean', action='store_true', help='Clean existing checkpoints and logs before training')
     args = parser.parse_args()
     
     # Load config
@@ -243,6 +316,9 @@ def main():
     if args.config and os.path.exists(args.config):
         # Could load from JSON/YAML here if needed
         pass
+
+    if args.clean:
+        cleanup_old_runs(config)
     
     # Set device
     device = torch.device(config.device if config.device == 'cpu' else f'cuda:{config.gpu_id}')
