@@ -1,6 +1,6 @@
-# Fusion Timing in Channel-Adaptive Models for CHAMMI
+# CHAMMI Dataset Pipeline
 
-This repository implements a complete dataset pipeline and training framework for investigating channel-adaptive vision transformers on the **CHAMMI (Channel-Adaptive Models in Microscopy Imaging)** benchmark dataset.
+This repository provides a complete dataset pipeline for the **CHAMMI (Channel-Adaptive Models in Microscopy Imaging)** benchmark dataset. The implementation handles all three sub-datasets with variable channel configurations and provides efficient batching for training any channel-adaptive model.
 
 ## Overview
 
@@ -8,11 +8,6 @@ CHAMMI consists of three fluorescence microscopy sub-datasets:
 - **Allen/WTC-11**: 65,103 images, 3 channels, .ome.tiff format
 - **HPA** (Human Protein Atlas): 66,936 images, 4 channels, .png format  
 - **CP** (Cell Painting): 88,245 images, 5 channels, .png format
-
-**Project Goal**: Determine where fusion should happen in channel-adaptive vision transformers:
-- **Early Fusion**: channels mixed immediately
-- **Late Fusion**: per-channel encoders and fusion only at the end
-- **Hybrid Fusion**: channels separate initially, then fused mid-network
 
 ## Quick Start
 
@@ -43,87 +38,6 @@ pip install -e .
          └── crops/
    ```
 
-### Training Setup (Main Approach)
-
-**Recommended: Randomly Interleave Batches from All Datasets**
-
-Each dataset (Allen, HPA, CP) has its natural channel configuration:
-- **Allen**: 3 channels (~31k samples)
-- **HPA**: 4 channels (~33k samples)
-- **CP**: 5 channels (~36k samples)
-
-**Key idea**: Randomly sample which dataset to get the next batch from. This prevents the model from learning a fixed dataset ordering and makes it more robust.
-
-```python
-from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_ordered_training_iterator
-
-# Training loop - batches randomly interleaved from all datasets
-for epoch in range(num_epochs):
-    # Create iterator for this epoch (will randomly interleave datasets)
-    iterator = create_dataset_ordered_training_iterator(
-        csv_file="path/to/CHAMMI/combined_metadata.csv",
-        root_dir="path/to/CHAMMI/",
-        batch_size=32,
-        shuffle=True,  # Shuffles samples within each dataset
-        target_labels='Label',  # From enriched_meta.csv
-        split='train',  # ~100k training samples
-        augment=True,  # RandomResizedCrop, flips (no color jitter)
-        normalize=True,  # Uses CHAMMI-specific per-channel stats
-        shuffle_dataset_order=True,  # Randomly samples which dataset per batch
-    )
-    
-    # Process all batches (randomly interleaved from all datasets)
-    for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
-        # Each batch is from one dataset with consistent channels
-        # Batches are randomly interleaved: CP → Allen → HPA → CP → ...
-        
-        channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
-        
-        # Your channel-adaptive ViT forward pass
-        outputs = model(batch_images, num_channels=channel_count)
-        
-        # Loss (supervised classification or ProxyNCA++)
-        loss = criterion(outputs, batch_labels)
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-    
-    # Iterator automatically stops after one epoch
-    # Next epoch will create a new iterator with different random interleaving
-```
-
-### Alternative: Interleaved with Shuffled Dataset Order
-
-For better generalization, interleave datasets with shuffled order each epoch:
-
-```python
-from channel_adaptive_pipeline.chammi_grouped_dataloader import create_interleaved_dataset_dataloader
-
-# Interleaves datasets in shuffled order each epoch
-interleaved = create_interleaved_dataset_dataloader(
-    csv_file="path/to/CHAMMI/combined_metadata.csv",
-    root_dir="path/to/CHAMMI/",
-    batch_size=32,
-    split='train',
-    augment=True,
-    normalize=True,
-    shuffle_dataset_order=True,  # Different dataset order each epoch
-)
-
-for epoch in range(num_epochs):
-    for batch_images, batch_metadatas, batch_labels, dataset_source in interleaved:
-        # Each batch from one dataset with consistent channels
-        # Dataset order changes each epoch (HPA→Allen→CP, then Allen→CP→HPA, etc.)
-        channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
-        outputs = model(batch_images, num_channels=channel_count)
-        loss = criterion(outputs, batch_labels)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-```
-
 ## Key Features
 
 ### Dataset Handling
@@ -133,7 +47,7 @@ for epoch in range(num_epochs):
 - ✅ **Label Extraction**: Automatically loads labels from enriched metadata
 - ✅ **128×128 Images**: All images resized to match project requirements
 
-### Efficient Batching (Main Approach)
+### Efficient Batching
 - ✅ **Dataset-Specific DataLoaders**: One DataLoader per dataset (Allen, HPA, CP) with natural channel configuration
   - Allen: 3 channels, ~31k samples
   - HPA: 4 channels, ~33k samples
@@ -193,12 +107,81 @@ image, metadata, label = dataset[0]
 # label: extracted label from enriched_meta.csv
 ```
 
+### Recommended: Randomly Interleave Batches from All Datasets
+
+**Main Training Approach**: Randomly sample which dataset to get the next batch from. This prevents the model from learning a fixed dataset ordering and makes it more robust.
+
+```python
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_ordered_training_iterator
+
+# Training loop - batches randomly interleaved from all datasets
+for epoch in range(num_epochs):
+    # Create iterator for this epoch (will randomly interleave datasets)
+    iterator = create_dataset_ordered_training_iterator(
+        csv_file="path/to/CHAMMI/combined_metadata.csv",
+        root_dir="path/to/CHAMMI/",
+        batch_size=32,
+        shuffle=True,  # Shuffles samples within each dataset
+        target_labels='Label',  # From enriched_meta.csv
+        split='train',  # ~100k training samples
+        augment=True,  # RandomResizedCrop, flips (no color jitter)
+        normalize=True,  # Uses CHAMMI-specific per-channel stats
+        shuffle_dataset_order=True,  # Randomly samples which dataset per batch
+    )
+    
+    # Process all batches (randomly interleaved from all datasets)
+    for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
+        # Each batch is from one dataset with consistent channels
+        # Batches are randomly interleaved: CP → Allen → HPA → CP → ...
+        
+        channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
+        
+        # Your model forward pass
+        outputs = model(batch_images, num_channels=channel_count)
+        
+        # Loss computation
+        loss = criterion(outputs, batch_labels)
+        
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    
+    # Iterator automatically stops after one epoch
+    # Next epoch will create a new iterator with different random interleaving
+```
+
+### Alternative: Separate DataLoaders per Dataset
+
+```python
+from channel_adaptive_pipeline.chammi_grouped_dataloader import create_dataset_specific_dataloaders
+
+# Create one DataLoader per dataset
+dataloaders = create_dataset_specific_dataloaders(
+    csv_file="path/to/combined_metadata.csv",
+    root_dir="path/to/CHAMMI/",
+    batch_size=32,
+    split='train',
+    augment=True,
+    normalize=True,
+)
+
+# Access individual dataset DataLoaders
+allen_loader = dataloaders['Allen']  # 3 channels
+hpa_loader = dataloaders['HPA']      # 4 channels
+cp_loader = dataloaders['CP']         # 5 channels
+
+# Use in training loop
+for batch_images, batch_metadatas, batch_labels in allen_loader:
+    # batch_images.shape = (32, 3, 128, 128)
+    pass
+```
+
 ### Batch Shapes
 
-**Dataset-Specific DataLoaders (Main Approach):**
+**Dataset-Specific DataLoaders:**
 ```python
 # Each dataset has its natural channel configuration
-dataloaders = create_dataset_specific_dataloaders(...)
 
 # Allen DataLoader: all batches have 3 channels
 batch_images.shape = (batch_size, 3, 128, 128)  # Allen
@@ -230,28 +213,6 @@ python check_normalization_per_batch.py
 cd examples/tests
 python test_chammi_dataset.py
 ```
-
-## Evaluation
-
-Models will be evaluated on:
-- **SD vs OOD accuracy and macro-F1**: In-distribution vs out-of-distribution performance
-- **Channel robustness**: Dropping or shuffling channels
-- **Channel importance**: Which channels are most influential for each task
-
-This allows identification of which fusion strategy (Early/Late/Hybrid) is most robust and which biological signals each task depends on.
-
-## Model Architecture
-
-Train channel-adaptive ViT models at ViT-Tiny/Small capacity with different fusion strategies:
-
-1. **Early Fusion**: Channels mixed immediately → standard ViT with variable input channels
-2. **Late Fusion**: Per-channel encoders, fusion at end → separate encoders per channel
-3. **Hybrid Fusion**: Channels separate initially, fused mid-network → flexible fusion point
-
-## Loss Functions
-
-- **Supervised Classification**: Standard cross-entropy loss
-- **ProxyNCA++**: Supervised metric learning loss (used in CHAMMI benchmark)
 
 ## Project Structure
 
@@ -310,4 +271,4 @@ The original CHAMMI benchmark code and data can be found at:
 
 ---
 
-**Status**: ✅ Dataset pipeline complete and ready for channel-adaptive ViT training
+**Status**: ✅ Dataset pipeline complete and ready for training any channel-adaptive model

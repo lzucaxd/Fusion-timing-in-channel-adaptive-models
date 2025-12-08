@@ -1,51 +1,98 @@
 """
-Grouped DataLoader for CHAMMI dataset.
-Creates separate batches for each channel count (3, 4, 5) for efficient processing.
-Supports dataset ordering strategies for better generalization.
+Grouped DataLoaders for CHAMMI dataset.
+
+Creates separate DataLoaders for each channel count (3, 4, 5) and provides
+utilities for random batch interleaving during training.
 """
 
 import torch
 import random
-from torch.utils.data import Dataset, DataLoader, ConcatDataset
-from typing import Dict, List, Optional, Union, Iterator, Tuple
-from channel_adaptive_pipeline.chammi_dataset import CHAMMIDataset, CHAMMITransform, create_chammi_dataloader
+from torch.utils.data import Dataset, DataLoader, Subset
+from typing import Dict, List, Optional, Iterator, Tuple
+from channel_adaptive_pipeline.chammi_dataset import CHAMMIDataset, CHAMMITransform
+
+
+# Module-level collate function for multiprocessing support
+def _chammi_collate_fn(batch):
+    """
+    Collate function for CHAMMI batches.
+    Defined at module level for pickling with multiprocessing.
+    """
+    images, metadatas, labels = zip(*batch)
+    # Stack images (all have same channels within a batch)
+    batch_images = torch.stack(images)
+    batch_metadatas = list(metadatas)
+    batch_labels = list(labels)  # Keep as list (may be strings or mixed types)
+    return batch_images, batch_metadatas, batch_labels
+
+
+# Module-level transform wrapper for multiprocessing support
+class TransformWrapper(Dataset):
+    """Wrapper for applying transforms to dataset subsets."""
+    def __init__(self, subset: Subset, transform):
+        self.subset = subset
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.subset)
+    
+    def __getitem__(self, idx):
+        image, metadata, label = self.subset[idx]
+        if self.transform:
+            image = self.transform(image)
+        return image, metadata, label
 
 
 def create_grouped_chammi_dataloaders(
     csv_file: str,
     root_dir: str,
+    split: str = "train",
     batch_size: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
     num_workers: int = 4,
-    pin_memory: bool = True,
+    shuffle: bool = True,
+    target_labels: Optional[str] = None,
+    augment: bool = True,
+    normalize: bool = True,
+    resize_to: int = 128,
+    drop_last: bool = True,
 ) -> Dict[int, DataLoader]:
     """
     Create separate DataLoaders for each channel count (3, 4, 5).
-    This allows efficient batching where all samples in a batch have the same channels.
+    
+    Args:
+        csv_file: Path to combined_metadata.csv
+        root_dir: Root directory of CHAMMI dataset
+        split: Dataset split ('train', 'test', etc.)
+        batch_size: Batch size per DataLoader
+        num_workers: Number of data loading workers
+        shuffle: Whether to shuffle samples
+        target_labels: Label column name (e.g., 'Label')
+        augment: Whether to apply augmentations
+        normalize: Whether to normalize images
+        resize_to: Target image size
+        drop_last: Whether to drop last incomplete batch
     
     Returns:
         Dict mapping channel_count -> DataLoader
         Example: {3: DataLoader(...), 4: DataLoader(...), 5: DataLoader(...)}
+        
+        Each DataLoader yields batches of:
+        - images: (B, C, 128, 128) where C is fixed for that loader
+        - metadatas: list[dict]
+        - labels: list (may contain strings or other types)
     """
-    # Create base dataset to filter
+    # Create base dataset (no transform yet - will apply in wrapper)
     base_dataset = CHAMMIDataset(
         csv_file=csv_file,
         root_dir=root_dir,
         target_labels=target_labels,
-        transform=None,  # Transform will be applied in DataLoader
+        transform=None,  # Transform applied in wrapper
         split=split,
         resize_to=resize_to,
     )
     
     # Group indices by channel count
-    indices_by_channels = {3: [], 4: [], 5: []}
+    indices_by_channels: Dict[int, List[int]] = {3: [], 4: [], 5: []}
     
     for i in range(len(base_dataset)):
         row = base_dataset.metadata.iloc[i]
@@ -53,321 +100,132 @@ def create_grouped_chammi_dataloaders(
         if num_channels in indices_by_channels:
             indices_by_channels[num_channels].append(i)
     
-    # Create separate datasets and dataloaders for each channel count
-    dataloaders = {}
+    # Create transform
     transform = CHAMMITransform(
         size=resize_to,
         augment=augment,
         normalize=normalize,
-        mean=mean,
-        std=std
     )
     
+    # Create DataLoaders for each channel count
+    dataloaders = {}
     for num_channels, indices in indices_by_channels.items():
         if len(indices) == 0:
             continue
         
-        # Create subset dataset
-        subset_dataset = torch.utils.data.Subset(base_dataset, indices)
+        # Create subset
+        subset = Subset(base_dataset, indices)
         
         # Apply transform wrapper
-        class TransformWrapper(Dataset):
-            def __init__(self, subset, transform):
-                self.subset = subset
-                self.transform = transform
-            
-            def __len__(self):
-                return len(self.subset)
-            
-            def __getitem__(self, idx):
-                image, metadata, labels = self.subset[idx]
-                if self.transform:
-                    image = self.transform(image)
-                # Return tuple - DataLoader will handle collation
-                return image, metadata, labels if labels is not None else []
+        transformed_dataset = TransformWrapper(subset, transform)
         
-        transformed_dataset = TransformWrapper(subset_dataset, transform)
-        
-        # Custom collate to handle metadata dicts and None labels
-        def collate_fn(batch):
-            images, metadatas, labels = zip(*batch)
-            # Images can now be stacked since all have same channels!
-            batch_images = torch.stack(images)
-            batch_metadatas = list(metadatas)
-            # Handle labels - convert None to empty list
-            batch_labels = [label if label is not None else None for label in labels]
-            return batch_images, batch_metadatas, batch_labels
-        
-        # Create DataLoader - can now stack normally since all have same channels
+        # Create DataLoader
         dataloader = DataLoader(
             transformed_dataset,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=collate_fn,
+            pin_memory=True,
+            drop_last=drop_last,
+            collate_fn=_chammi_collate_fn,  # Module-level function
         )
         
         dataloaders[num_channels] = dataloader
-        print(f"Created DataLoader for {num_channels} channels: {len(indices)} samples")
+        print(f"Created DataLoader for {num_channels} channels: {len(indices)} samples, {len(dataloader)} batches")
     
     return dataloaders
 
 
-def create_interleaved_chammi_dataloader(
-    csv_file: str,
-    root_dir: str,
-    batch_size_per_channel: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
-    num_workers: int = 4,
-    pin_memory: bool = True,
-):
-    """
-    Create a single DataLoader that interleaves batches from each channel count.
-    Each iteration yields a batch from one channel group (all same channels).
-    
-    Yields:
-        (batch_images, batch_metadatas, batch_labels, channel_count)
-        - batch_images: tensor of shape (batch_size, C, H, W) where C is consistent
-        - channel_count: 3, 4, or 5
-    """
-    # Create grouped dataloaders
-    grouped_dataloaders = create_grouped_chammi_dataloaders(
-        csv_file=csv_file,
-        root_dir=root_dir,
-        batch_size=batch_size_per_channel,
-        shuffle=shuffle,
-        target_labels=target_labels,
-        split=split,
-        resize_to=resize_to,
-        augment=augment,
-        normalize=normalize,
-        mean=mean,
-        std=std,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
-    
-    # Create iterators for each dataloader
-    iterators = {ch: iter(dl) for ch, dl in grouped_dataloaders.items()}
-    
-    # Interleave batches
-    while True:
-        for channel_count in [3, 4, 5]:
-            if channel_count in iterators:
-                try:
-                    batch_images, batch_metadatas, batch_labels = next(iterators[channel_count])
-                    yield batch_images, batch_metadatas, batch_labels, channel_count
-                except StopIteration:
-                    # Restart this iterator
-                    iterators[channel_count] = iter(grouped_dataloaders[channel_count])
-                    batch_images, batch_metadatas, batch_labels = next(iterators[channel_count])
-                    yield batch_images, batch_metadatas, batch_labels, channel_count
-
-
-def create_dataset_ordered_dataloader(
-    csv_file: str,
-    root_dir: str,
-    batch_size: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
-    num_workers: int = 4,
-    pin_memory: bool = True,
-    shuffle_dataset_order: bool = True,
+def create_random_interleaved_iterator(
+    dataloaders: Dict[int, DataLoader],
+    random_seed: Optional[int] = None,
 ) -> Iterator[Tuple[torch.Tensor, List[Dict], List, int]]:
     """
-    Create a DataLoader that interleaves datasets in different orders each epoch.
-    This helps model generalization by preventing overfitting to a specific dataset order.
-    
-    At each epoch:
-    - Shuffles the order of datasets (Allen, HPA, CP) if shuffle_dataset_order=True
-    - Interleaves batches from different datasets in that order
-    - Maintains efficient batching (all samples in batch have same channels)
+    Create an iterator that randomly interleaves batches from different channel groups.
     
     Args:
-        shuffle_dataset_order: If True, shuffle dataset order each epoch (recommended)
-        All other args same as create_grouped_chammi_dataloaders
+        dataloaders: Dict mapping channel_count -> DataLoader (from create_grouped_chammi_dataloaders)
+        random_seed: Optional random seed for reproducibility
     
     Yields:
-        (batch_images, batch_metadatas, batch_labels, channel_count)
-        - batch_images: tensor of shape (batch_size, C, H, W)
-        - channel_count: 3, 4, or 5
+        (images, metadatas, labels, channel_count)
+        - images: (B, C, 128, 128) tensor
+        - metadatas: list of metadata dicts
+        - labels: list of labels
+        - channel_count: int (3, 4, or 5)
+    
+    Example:
+        dataloaders = create_grouped_chammi_dataloaders(...)
+        iterator = create_random_interleaved_iterator(dataloaders)
+        
+        for images, metadatas, labels, channel_count in iterator:
+            # Process batch - channel_count tells you which dataset this came from
+            ...
     """
-    # Create base dataset to filter by dataset source
-    base_dataset = CHAMMIDataset(
-        csv_file=csv_file,
-        root_dir=root_dir,
-        target_labels=target_labels,
-        transform=None,
-        split=split,
-        resize_to=resize_to,
-    )
+    if random_seed is not None:
+        random.seed(random_seed)
     
-    # Group indices by (channel_count, dataset_source)
-    indices_by_group = {}
-    dataset_sources = ['Allen', 'HPA', 'CP']
+    # Create iterators for each DataLoader
+    iterators = {ch: iter(dl) for ch, dl in dataloaders.items()}
     
-    for i in range(len(base_dataset)):
-        row = base_dataset.metadata.iloc[i]
-        num_channels = int(row['num_channels'])
-        dataset_source = row['file_path'].split('/')[0]
+    # Count total batches per channel group
+    batches_per_channel = {ch: len(dl) for ch, dl in dataloaders.items()}
+    total_batches = sum(batches_per_channel.values())
+    
+    # Track batches processed per channel
+    batches_processed = {ch: 0 for ch in dataloaders.keys()}
+    total_processed = 0
+    
+    while total_processed < total_batches:
+        # Get available channel groups that still have batches
+        available_channels = [
+            ch for ch in dataloaders.keys()
+            if batches_processed[ch] < batches_per_channel[ch]
+        ]
         
-        if num_channels in [3, 4, 5] and dataset_source in dataset_sources:
-            key = (num_channels, dataset_source)
-            if key not in indices_by_group:
-                indices_by_group[key] = []
-            indices_by_group[key].append(i)
-    
-    # Create DataLoaders for each (channel_count, dataset_source) group
-    transform = CHAMMITransform(
-        size=resize_to,
-        augment=augment,
-        normalize=normalize,
-        mean=mean,
-        std=std
-    )
-    
-    dataloaders_by_group = {}
-    
-    for (num_channels, dataset_source), indices in indices_by_group.items():
-        if len(indices) == 0:
+        if not available_channels:
+            break
+        
+        # Randomly choose a channel group
+        chosen_channel = random.choice(available_channels)
+        
+        try:
+            # Get batch from chosen channel group
+            images, metadatas, labels = next(iterators[chosen_channel])
+            batches_processed[chosen_channel] += 1
+            total_processed += 1
+            
+            yield images, metadatas, labels, chosen_channel
+            
+        except StopIteration:
+            # This channel group is exhausted
             continue
-        
-        subset_dataset = torch.utils.data.Subset(base_dataset, indices)
-        
-        class TransformWrapper(Dataset):
-            def __init__(self, subset, transform):
-                self.subset = subset
-                self.transform = transform
-            
-            def __len__(self):
-                return len(self.subset)
-            
-            def __getitem__(self, idx):
-                image, metadata, labels = self.subset[idx]
-                if self.transform:
-                    image = self.transform(image)
-                return image, metadata, labels
-        
-        transformed_dataset = TransformWrapper(subset_dataset, transform)
-        
-        def collate_fn(batch):
-            images, metadatas, labels = zip(*batch)
-            batch_images = torch.stack(images)
-            batch_metadatas = list(metadatas)
-            batch_labels = [label if label is not None else None for label in labels]
-            return batch_images, batch_metadatas, batch_labels
-        
-        dataloader = DataLoader(
-            transformed_dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=collate_fn,
-        )
-        
-        dataloaders_by_group[(num_channels, dataset_source)] = dataloader
-    
-    # Create iterators and yield batches in shuffled dataset order
-    while True:
-        # Determine dataset order for this epoch
-        if shuffle_dataset_order:
-            epoch_dataset_order = random.sample(dataset_sources, len(dataset_sources))
-        else:
-            epoch_dataset_order = dataset_sources
-        
-        # Create iterators for this epoch
-        iterators = {}
-        for (num_channels, dataset_source), dataloader in dataloaders_by_group.items():
-            iterators[(num_channels, dataset_source)] = iter(dataloader)
-        
-        # Interleave batches: cycle through datasets in order, within each cycle through channel counts
-        # This ensures dataset order changes each epoch while maintaining efficient batching
-        channel_counts = [3, 4, 5]
-        exhausted = False
-        
-        while not exhausted:
-            exhausted = True
-            # For each dataset in the epoch order, yield batches from all channel counts
-            for dataset_source in epoch_dataset_order:
-                for channel_count in channel_counts:
-                    key = (channel_count, dataset_source)
-                    if key in iterators:
-                        try:
-                            batch_images, batch_metadatas, batch_labels = next(iterators[key])
-                            yield batch_images, batch_metadatas, batch_labels, channel_count
-                            exhausted = False
-                        except StopIteration:
-                            # Restart this iterator for next epoch
-                            iterators[key] = iter(dataloaders_by_group[key])
-                            try:
-                                batch_images, batch_metadatas, batch_labels = next(iterators[key])
-                                yield batch_images, batch_metadatas, batch_labels, channel_count
-                                exhausted = False
-                            except StopIteration:
-                                pass
 
 
 def create_dataset_specific_dataloaders(
     csv_file: str,
     root_dir: str,
+    split: str = "train",
     batch_size: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
     num_workers: int = 4,
-    pin_memory: bool = True,
-    shuffle_dataset_order: bool = True,
+    shuffle: bool = True,
+    target_labels: Optional[str] = None,
+    augment: bool = True,
+    normalize: bool = True,
+    resize_to: int = 128,
+    drop_last: bool = True,
 ) -> Dict[str, DataLoader]:
     """
     Create separate DataLoaders for each dataset (Allen, HPA, CP).
-    This is the main training approach: one DataLoader per dataset with given channel configuration.
-    
-    Each dataset has its natural channel count:
-    - Allen: 3 channels
-    - HPA: 4 channels  
-    - CP: 5 channels
     
     Args:
-        shuffle_dataset_order: If True, shuffle dataset order when interleaving (if used)
-        All other args same as create_grouped_chammi_dataloaders
+        Same as create_grouped_chammi_dataloaders
     
     Returns:
         Dict mapping dataset_source -> DataLoader
         Example: {'Allen': DataLoader(...), 'HPA': DataLoader(...), 'CP': DataLoader(...)}
-        
-    Usage:
-        # Training with one DataLoader per dataset
-        dataloaders = create_dataset_specific_dataloaders(...)
-        
-        for epoch in range(num_epochs):
-            # Process each dataset separately
-            for dataset_name in ['Allen', 'HPA', 'CP']:
-                dataloader = dataloaders[dataset_name]
-                for batch_images, batch_metadatas, batch_labels in dataloader:
-                    # Process batch
-                    ...
     """
-    # Create base dataset to filter
+    # Create base dataset
     base_dataset = CHAMMIDataset(
         csv_file=csv_file,
         root_dir=root_dir,
@@ -378,352 +236,105 @@ def create_dataset_specific_dataloaders(
     )
     
     # Group indices by dataset source
-    indices_by_dataset = {'Allen': [], 'HPA': [], 'CP': []}
+    indices_by_dataset: Dict[str, List[int]] = {'Allen': [], 'HPA': [], 'CP': []}
     
     for i in range(len(base_dataset)):
         row = base_dataset.metadata.iloc[i]
-        dataset_source = row['file_path'].split('/')[0]
+        file_path = row['file_path']
+        dataset_source = file_path.split('/')[0]
         
         if dataset_source in indices_by_dataset:
             indices_by_dataset[dataset_source].append(i)
     
-    # Create separate datasets and dataloaders for each dataset source
-    dataloaders = {}
+    # Create transform
     transform = CHAMMITransform(
         size=resize_to,
         augment=augment,
         normalize=normalize,
-        mean=mean,
-        std=std
     )
     
+    # Create DataLoaders for each dataset
+    dataloaders = {}
     for dataset_source, indices in indices_by_dataset.items():
         if len(indices) == 0:
             continue
         
-        # Create subset dataset
-        subset_dataset = torch.utils.data.Subset(base_dataset, indices)
+        # Create subset
+        subset = Subset(base_dataset, indices)
         
         # Apply transform wrapper
-        class TransformWrapper(Dataset):
-            def __init__(self, subset, transform):
-                self.subset = subset
-                self.transform = transform
-            
-            def __len__(self):
-                return len(self.subset)
-            
-            def __getitem__(self, idx):
-                image, metadata, labels = self.subset[idx]
-                if self.transform:
-                    image = self.transform(image)
-                return image, metadata, labels
+        transformed_dataset = TransformWrapper(subset, transform)
         
-        transformed_dataset = TransformWrapper(subset_dataset, transform)
-        
-        # Custom collate to handle metadata dicts
-        def collate_fn(batch):
-            images, metadatas, labels = zip(*batch)
-            # Images can be stacked since all from same dataset (same channels)
-            batch_images = torch.stack(images)
-            batch_metadatas = list(metadatas)
-            batch_labels = [label if label is not None else None for label in labels]
-            return batch_images, batch_metadatas, batch_labels
-        
-        # Create DataLoader - enable shuffling for frequent reshuffling
+        # Create DataLoader
         dataloader = DataLoader(
             transformed_dataset,
             batch_size=batch_size,
-            shuffle=shuffle,  # Shuffle every epoch for variety
+            shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=collate_fn,
+            pin_memory=True,
+            drop_last=drop_last,
+            collate_fn=_chammi_collate_fn,  # Module-level function
         )
         
         dataloaders[dataset_source] = dataloader
-        print(f"Created DataLoader for {dataset_source}: {len(indices)} samples")
+        print(f"Created DataLoader for {dataset_source}: {len(indices)} samples, {len(dataloader)} batches")
     
     return dataloaders
 
 
-def create_dataset_ordered_training_iterator(
-    csv_file: str,
-    root_dir: str,
-    batch_size: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
-    num_workers: int = 4,
-    pin_memory: bool = True,
-    shuffle_dataset_order: bool = True,
+def create_random_dataset_interleaved_iterator(
+    dataloaders: Dict[str, DataLoader],
+    random_seed: Optional[int] = None,
 ) -> Iterator[Tuple[torch.Tensor, List[Dict], List, str]]:
     """
-    Create a training iterator that randomly interleaves batches from different datasets.
+    Create an iterator that randomly interleaves batches from different datasets.
     
-    This is the main training approach:
-    - One DataLoader per dataset (Allen, HPA, CP)
-    - Randomly sample which dataset to get next batch from
-    - Mix batches from all datasets to prevent model from learning ordering
-    - Shuffle dataset order for batches each epoch for robustness
-    
-    Example batches in one epoch:
-        Batch 1: HPA   (4ch)  - randomly sampled
-        Batch 2: Allen (3ch)  - randomly sampled
-        Batch 3: CP    (5ch)  - randomly sampled
-        Batch 4: Allen (3ch)  - randomly sampled
-        Batch 5: HPA   (4ch)  - randomly sampled
-        ... continues until all samples processed
-    
-    This prevents the model from learning a fixed dataset ordering and makes it more robust.
+    Args:
+        dataloaders: Dict mapping dataset_source -> DataLoader (from create_dataset_specific_dataloaders)
+        random_seed: Optional random seed for reproducibility
     
     Yields:
-        (batch_images, batch_metadatas, batch_labels, dataset_source)
-        - batch_images: tensor of shape (batch_size, C, H, W) where C is dataset-specific
-        - dataset_source: 'Allen' (3ch), 'HPA' (4ch), or 'CP' (5ch)
-    
-    Usage:
-        for epoch in range(num_epochs):
-            # Create iterator for this epoch (will randomly interleave datasets)
-            iterator = create_dataset_ordered_training_iterator(
-                csv_file="...",
-                root_dir="...",
-                batch_size=32,
-                shuffle=True,  # Shuffles samples within each dataset
-                split='train',
-                augment=True,
-                normalize=True,
-                shuffle_dataset_order=True,  # Randomly samples which dataset per batch
-            )
-            
-            # Process all batches (randomly interleaved from all datasets)
-            for batch_images, batch_metadatas, batch_labels, dataset_source in iterator:
-                channel_count = 3 if dataset_source == 'Allen' else 4 if dataset_source == 'HPA' else 5
-                outputs = model(batch_images, num_channels=channel_count)
-                loss = criterion(outputs, batch_labels)
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-            
-            # Iterator automatically stops after one epoch
-            # Next epoch will create a new iterator with different random interleaving
+        (images, metadatas, labels, dataset_source)
+        - images: (B, C, 128, 128) tensor where C depends on dataset (3 for Allen, 4 for HPA, 5 for CP)
+        - metadatas: list of metadata dicts
+        - labels: list of labels
+        - dataset_source: str ('Allen', 'HPA', or 'CP')
     """
-    # Create dataset-specific dataloaders
-    dataset_dataloaders = create_dataset_specific_dataloaders(
-        csv_file=csv_file,
-        root_dir=root_dir,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        target_labels=target_labels,
-        split=split,
-        resize_to=resize_to,
-        augment=augment,
-        normalize=normalize,
-        mean=mean,
-        std=std,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        shuffle_dataset_order=shuffle_dataset_order,
-    )
+    if random_seed is not None:
+        random.seed(random_seed)
     
-    dataset_names = ['Allen', 'HPA', 'CP']
+    # Create iterators for each DataLoader
+    iterators = {ds: iter(dl) for ds, dl in dataloaders.items()}
     
-    # Create iterators for each dataset
-    iterators = {}
-    dataset_batch_counts = {}  # Track how many batches each dataset has yielded
-    dataset_total_batches = {}  # Total batches per dataset
+    # Count total batches per dataset
+    batches_per_dataset = {ds: len(dl) for ds, dl in dataloaders.items()}
+    total_batches = sum(batches_per_dataset.values())
     
-    for dataset_name in dataset_names:
-        if dataset_name in dataset_dataloaders:
-            dataloader = dataset_dataloaders[dataset_name]
-            iterators[dataset_name] = iter(dataloader)
-            # Count total batches for this dataset
-            dataset_total_batches[dataset_name] = len(dataloader)
-            dataset_batch_counts[dataset_name] = 0
+    # Track batches processed per dataset
+    batches_processed = {ds: 0 for ds in dataloaders.keys()}
+    total_processed = 0
     
-    # Randomly sample which dataset to get next batch from
-    # Continue until all datasets are exhausted (one epoch complete)
-    exhausted_datasets = set()
-    
-    while len(exhausted_datasets) < len(iterators):
-        # Get list of datasets that haven't been exhausted
-        available = [d for d in dataset_names if d in iterators and d not in exhausted_datasets]
+    while total_processed < total_batches:
+        # Get available datasets that still have batches
+        available_datasets = [
+            ds for ds in dataloaders.keys()
+            if batches_processed[ds] < batches_per_dataset[ds]
+        ]
         
-        if not available:
+        if not available_datasets:
             break
         
-        # Randomly sample which dataset to use for this batch
-        if shuffle_dataset_order:
-            dataset_source = random.choice(available)
-        else:
-            # Cycle through in fixed order
-            cycle_idx = sum(dataset_batch_counts[d] for d in dataset_names if d in available) % len(available)
-            dataset_source = available[cycle_idx]
+        # Randomly choose a dataset
+        chosen_dataset = random.choice(available_datasets)
         
-        # Get next batch from selected dataset
         try:
-            batch_images, batch_metadatas, batch_labels = next(iterators[dataset_source])
-            dataset_batch_counts[dataset_source] += 1
-            yield batch_images, batch_metadatas, batch_labels, dataset_source
+            # Get batch from chosen dataset
+            images, metadatas, labels = next(iterators[chosen_dataset])
+            batches_processed[chosen_dataset] += 1
+            total_processed += 1
             
-            # Check if this dataset is exhausted
-            if dataset_batch_counts[dataset_source] >= dataset_total_batches[dataset_source]:
-                exhausted_datasets.add(dataset_source)
+            yield images, metadatas, labels, chosen_dataset
+            
         except StopIteration:
-            exhausted_datasets.add(dataset_source)
-
-
-def create_interleaved_dataset_dataloader(
-    csv_file: str,
-    root_dir: str,
-    batch_size: int = 32,
-    shuffle: bool = True,
-    target_labels: Optional[Union[str, List[str]]] = None,
-    split: Optional[str] = None,
-    resize_to: int = 128,
-    augment: bool = False,
-    normalize: bool = True,
-    mean: Optional[List[float]] = None,
-    std: Optional[List[float]] = None,
-    num_workers: int = 4,
-    pin_memory: bool = True,
-    shuffle_dataset_order: bool = True,
-) -> Iterator[Tuple[torch.Tensor, List[Dict], List, str]]:
-    """
-    [DEPRECATED - use create_dataset_ordered_training_iterator instead]
-    Create a DataLoader that interleaves datasets in different orders each epoch.
-    One DataLoader per dataset, shuffled order for better generalization.
-    
-    Yields:
-        (batch_images, batch_metadatas, batch_labels, dataset_source)
-        - batch_images: tensor of shape (batch_size, C, H, W) where C is dataset-specific
-        - dataset_source: 'Allen' (3ch), 'HPA' (4ch), or 'CP' (5ch)
-    """
-    # For backwards compatibility, delegate to the new function
-    return create_dataset_ordered_training_iterator(
-        csv_file=csv_file,
-        root_dir=root_dir,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        target_labels=target_labels,
-        split=split,
-        resize_to=resize_to,
-        augment=augment,
-        normalize=normalize,
-        mean=mean,
-        std=std,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        shuffle_dataset_order=shuffle_dataset_order,
-    )
-
-
-if __name__ == "__main__":
-    # Example usage
-    import os
-    
-    chammi_root = "/Users/zamfiraluca/Downloads/CHAMMI"
-    csv_file = os.path.join(chammi_root, "combined_metadata.csv")
-    
-    print("Option 1: Separate DataLoaders for each channel count")
-    print("=" * 70)
-    
-    dataloaders = create_grouped_chammi_dataloaders(
-        csv_file=csv_file,
-        root_dir=chammi_root,
-        batch_size=32,
-        shuffle=True,
-        split='train',
-        augment=True,
-    )
-    
-    print("\nTesting DataLoaders:")
-    for channel_count, dataloader in dataloaders.items():
-        batch_images, batch_metadatas, batch_labels = next(iter(dataloader))
-        print(f"\n{channel_count} channels DataLoader:")
-        print(f"  Batch shape: {batch_images.shape}  # (batch_size, {channel_count}, 128, 128)")
-        print(f"  All same channels: ✓")
-        print(f"  Can process efficiently: ✓")
-    
-    print("\n\nOption 2: Interleaved DataLoader")
-    print("=" * 70)
-    
-    interleaved = create_interleaved_chammi_dataloader(
-        csv_file=csv_file,
-        root_dir=chammi_root,
-        batch_size_per_channel=32,
-        split='train',
-        augment=True,
-    )
-    
-    print("\nTesting interleaved DataLoader (first 3 batches):")
-    for i, (batch_images, batch_metadatas, batch_labels, channel_count) in enumerate(interleaved):
-        if i >= 3:
-            break
-        print(f"\nBatch {i+1}:")
-        print(f"  Channel count: {channel_count}")
-        print(f"  Batch shape: {batch_images.shape}  # (batch_size, {channel_count}, 128, 128)")
-        print(f"  All same channels: ✓")
-    
-    print("\n\nOption 3: Dataset-Specific DataLoaders (one per dataset)")
-    print("=" * 70)
-    
-    dataset_dataloaders = create_dataset_specific_dataloaders(
-        csv_file=csv_file,
-        root_dir=chammi_root,
-        batch_size=32,
-        split='train',
-        augment=True,
-    )
-    
-    print("\nTesting dataset-specific DataLoaders:")
-    for dataset_name, dataloader in dataset_dataloaders.items():
-        batch_images, batch_metadatas, batch_labels = next(iter(dataloader))
-        channel_count = batch_metadatas[0]['num_channels']
-        print(f"\n{dataset_name} DataLoader:")
-        print(f"  Batch shape: {batch_images.shape}  # (batch_size, {channel_count}, 128, 128)")
-        print(f"  All same channels: ✓")
-        print(f"  All same dataset: ✓")
-    
-    print("\n\nOption 4: Dataset-Ordered Training Iterator (MAIN APPROACH)")
-    print("=" * 70)
-    print("Processes one complete dataset at a time, with shuffled order each epoch")
-    
-    iterator = create_dataset_ordered_training_iterator(
-        csv_file=csv_file,
-        root_dir=chammi_root,
-        batch_size=32,
-        split='train',
-        augment=True,
-        shuffle_dataset_order=True,
-    )
-    
-    print("\nTesting dataset-ordered training iterator (first epoch - 10 batches):")
-    current_dataset = None
-    batch_count = 0
-    datasets_processed = []
-    
-    for i, (batch_images, batch_metadatas, batch_labels, dataset_source) in enumerate(iterator):
-        if i >= 10:
-            break
-        
-        # Track when we switch datasets
-        if dataset_source != current_dataset:
-            if current_dataset is not None:
-                print(f"\n  Finished processing {current_dataset} dataset")
-            current_dataset = dataset_source
-            if dataset_source not in datasets_processed:
-                datasets_processed.append(dataset_source)
-                print(f"\n  Starting {dataset_source} dataset (all batches from this dataset):")
-        
-        batch_count += 1
-        channel_count = batch_metadatas[0]['num_channels']
-        print(f"    Batch {batch_count} from {dataset_source}: shape={batch_images.shape}, channels={channel_count}")
-    
-    print(f"\n  Dataset order for this epoch: {' → '.join(datasets_processed)}")
-    print("  Next epoch will use a different shuffled order")
-
+            # This dataset is exhausted
+            continue

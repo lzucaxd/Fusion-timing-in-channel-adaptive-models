@@ -1,16 +1,14 @@
 from setuptools import setup, find_packages
 
-from morphem import __version__, __author__
-
 setup(
-    name='morphem',
-    version=__version__,
+    name='channel-adaptive-pipeline',
+    version='0.1.0',
 
-    url='https://github.com/broadinstitute/MorphEm',
-    author=__author__,
+    url='https://github.com/lzucaxd/Fusion-timing-in-channel-adaptive-models',
+    author='CHAMMI Team',
     author_email='zitong@broadinstitute.org',
 
-    py_modules=find_packages(),
+    packages=find_packages(),
     install_requires=[
     #'faiss-gpu==1.7.2',
     'matplotlib==3.5.3',
