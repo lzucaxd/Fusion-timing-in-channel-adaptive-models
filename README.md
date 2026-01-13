@@ -236,7 +236,7 @@ Fusion-timing-in-channel-adaptive-models/
 
 ### HierBoCSetViT (Hierarchical Bag-of-Channels Set Transformer Vision Transformer)
 
-A state-of-the-art channel-adaptive model for multi-channel microscopy images that treats channels as an unordered set.
+A state-of-the-art channel-adaptive model for multi-channel microscopy images that treats channels as an unordered set. Achieves **72.12% overall accuracy** and **56.46% Macro-F1** across all CHAMMI tasks.
 
 **Key Features:**
 - ✅ **Hierarchical Architecture**: Patch-level ViT encoder + Set Transformer channel aggregator
@@ -283,10 +283,87 @@ python training/evaluate_hier_boc.py \
 - **Channel Aggregator**: Set Transformer with Pooling-by-Multihead-Attention (PMA)
 - **Head**: Cross-entropy or ProxyNCA++ for metric learning
 
-For detailed model documentation, see:
-- `HIER_BOC_SETVIT_README.md` - Model architecture details
-- `NEW_FEATURES_SUMMARY.md` - Complete list of new features
-- `COMPREHENSIVE_RESULTS_SUMMARY.md` - Experimental results
+---
+
+## Experimental Results
+
+### Overall Performance Summary
+
+| Model | Overall Accuracy | Overall Macro-F1 | Best Dataset | Notes |
+|-------|-----------------|------------------|--------------|-------|
+| **BoC-ViT-Mean** | 48.35% | 32.70% | Allen (93.02%) | Baseline with mean pooling |
+| **BoC-ViT-Attn** | 50.11% | 32.52% | Allen (93.61%) | Baseline with attention pooling |
+| **HierBoC-Tiny** | 70.77% | 55.39% | Allen (96.87%) | Pretrained ViT-Tiny encoder |
+| **HierBoC-Small** | **72.12%** | **56.46%** | **Allen (96.93%)** | **Best overall performance** |
+| **HierBoC-Tiny-6H** | 71.71% | 54.92% | HPA (90.16%) | More heads, deeper aggregator |
+
+**Key Achievement**: HierBoCSetViT-Small achieves **72.12% accuracy** and **56.46% Macro-F1**, representing a **+22% improvement** over baseline BoC-ViT models.
+
+### Best Model: HierBoCSetViT-Small Results
+
+#### Allen Dataset (3 channels)
+| Task | Accuracy | Macro-F1 | Description |
+|------|----------|----------|-------------|
+| Task_one | **96.93%** | **63.34%** | Same-distribution test |
+| Task_two | **95.54%** | **52.02%** | OOD with known classes |
+
+#### HPA Dataset (4 channels)
+| Task | Accuracy | Macro-F1 | Description |
+|------|----------|----------|-------------|
+| Task_one | **93.42%** | **93.88%** | Same-distribution test |
+| Task_two | **85.65%** | **83.98%** | OOD with known classes |
+| Task_three | **46.63%** | **24.44%** | OOD with novel classes (zero-shot) |
+
+#### CP Dataset (5 channels)
+| Task | Accuracy | Macro-F1 | Description |
+|------|----------|----------|-------------|
+| Task_one | **87.56%** | **90.41%** | Same-distribution test |
+| Task_two | **60.57%** | **52.34%** | OOD with known classes |
+| Task_three | 25.72% | 18.58% | OOD with novel classes (zero-shot) |
+| Task_four | **57.08%** | **29.12%** | OOD with novel classes (zero-shot) |
+
+### Performance by Task Type
+
+**Same-Distribution (SD) Tasks** (Task_one):
+- Allen: **96.93%** accuracy
+- HPA: **93.42%** accuracy  
+- CP: **87.56%** accuracy
+- **Average: 92.64%** - Excellent in-distribution performance
+
+**Out-of-Distribution (OOD) with Known Classes** (Task_two):
+- Allen: **95.54%** accuracy
+- HPA: **85.65%** accuracy
+- CP: **60.57%** accuracy
+- **Average: 80.59%** - Strong generalization to OOD data
+
+**Out-of-Distribution with Novel Classes** (Task_three/four):
+- HPA Task_three: **46.63%** accuracy
+- CP Task_three: 25.72% accuracy
+- CP Task_four: **57.08%** accuracy
+- **Average: 43.14%** - Challenging zero-shot learning task
+
+### Key Findings
+
+1. **Pretrained Encoders Provide Massive Gains**: HierBoC models achieve +20-22% accuracy improvement over baseline BoC-ViT
+2. **ViT-Small Outperforms ViT-Tiny**: +1.35% accuracy improvement, especially on CP dataset (+16%)
+3. **Strong Generalization**: 80.59% average accuracy on OOD tasks with known classes
+4. **Novel Class Challenge**: Zero-shot novel class performance remains challenging (25-57% accuracy)
+5. **Dataset-Specific Performance**:
+   - **Allen**: Excellent performance (96-97% accuracy) - 3 channels sufficient
+   - **HPA**: Strong performance (85-93% accuracy) - 4 channels provide good signal
+   - **CP**: Good performance (60-88% accuracy) - 5 channels may have redundancy
+
+### Comparison: Baseline vs. HierBoC
+
+| Metric | BoC-ViT-Attn | HierBoC-Tiny | HierBoC-Small | Improvement |
+|--------|--------------|--------------|---------------|-------------|
+| **Overall Accuracy** | 50.11% | 70.77% | **72.12%** | **+22.01%** |
+| **Overall Macro-F1** | 32.52% | 55.39% | **56.46%** | **+23.94%** |
+| **Allen Task_one** | 93.61% | 96.87% | **96.93%** | **+3.32%** |
+| **HPA Task_one** | 50.94% | 88.56% | **93.42%** | **+42.48%** |
+| **CP Task_one** | 48.45% | 71.48% | **87.56%** | **+39.11%** |
+
+For detailed per-task results and analysis, see `COMPREHENSIVE_RESULTS_SUMMARY.md`.
 
 ## Documentation
 
@@ -329,7 +406,35 @@ The original CHAMMI benchmark code and data can be found at:
 
 ---
 
-**Status**: ✅ Dataset pipeline complete and ready for training any channel-adaptive model
+## Best Practices and Recommendations
+
+### Model Selection
+
+**For Best Performance:**
+- Use **HierBoCSetViT-Small** with `channel_embed_mode="attn_pool"` and `pma_num_seeds=4`
+- Expect ~72% overall accuracy, 96%+ on Allen, 93%+ on HPA, 87%+ on CP (Task_one)
+
+**For Faster Training/Inference:**
+- Use **HierBoCSetViT-Tiny** - achieves 70.77% accuracy with ~4x faster training
+- Good balance between performance and efficiency
+
+### Training Recommendations
+
+1. **Always use pretrained encoders** (timm ViT)
+2. **Use channel permutation and dropout** (p=0.3) for robustness
+3. **Start with ViT-Tiny** for faster iteration, then scale to ViT-Small
+4. **Use ProxyNCA++ loss** with temperature 0.05-0.07
+5. **Train for 20-25 epochs** with learning rate 1e-4 to 8e-5
+6. **Use two-tier learning rates**: `encoder_lr_mult=0.2` for pretrained encoder
+7. **Enable gradient clipping**: `grad_clip_norm=1.0` for stability
+
+### Evaluation Recommendations
+
+1. **Use cosine distance** for 1-NN evaluation (aligned with ProxyNCA training)
+2. **Use leave-one-out** protocol for novel class tasks (Task_three/four)
+3. **Report both Accuracy and Macro-F1** (handles class imbalance)
+4. **Visualize embeddings** (UMAP/t-SNE) for interpretability
+5. **Analyze attention maps** for channel importance insights
 
 ---
 
@@ -352,3 +457,7 @@ The original CHAMMI benchmark code and data can be found at:
 - **Reproducibility**: Random seed control for reproducible experiments
 
 See `NEW_FEATURES_SUMMARY.md` for complete details.
+
+---
+
+**Status**: ✅ Complete pipeline with state-of-the-art results (72.12% accuracy) on CHAMMI benchmark
