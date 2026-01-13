@@ -438,7 +438,7 @@ The original CHAMMI benchmark code and data can be found at:
 
 ---
 
-## Recent Updates (December 2024)
+## Recent Updates 
 
 ### Model Enhancements
 - **Attention Pooling**: New default mode for patch token aggregation with learnable query
@@ -458,6 +458,3 @@ The original CHAMMI benchmark code and data can be found at:
 
 See `NEW_FEATURES_SUMMARY.md` for complete details.
 
----
-
-**Status**: ✅ Complete pipeline with state-of-the-art results (72.12% accuracy) on CHAMMI benchmark
