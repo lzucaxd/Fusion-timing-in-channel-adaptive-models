@@ -232,10 +232,68 @@ Fusion-timing-in-channel-adaptive-models/
 └── README.md                          # This file
 ```
 
+## Models
+
+### HierBoCSetViT (Hierarchical Bag-of-Channels Set Transformer Vision Transformer)
+
+A state-of-the-art channel-adaptive model for multi-channel microscopy images that treats channels as an unordered set.
+
+**Key Features:**
+- ✅ **Hierarchical Architecture**: Patch-level ViT encoder + Set Transformer channel aggregator
+- ✅ **Permutation Invariant**: Robust to channel ordering
+- ✅ **Multiple Embedding Modes**: CLS token, mean pooling, or attention pooling (default: `attn_pool`)
+- ✅ **Optional Channel Gating**: Learnable gating mechanism for channel importance
+- ✅ **Multi-Seed PMA**: Multiple bag queries for richer aggregation
+- ✅ **Pretrained Encoders**: ViT-Tiny or ViT-Small from timm
+
+**Training Features:**
+- ✅ **ProxyNCA Optimization**: Separate parameter group for metric learning proxies
+- ✅ **Two-Tier Learning Rates**: Different LRs for encoder vs. rest of model
+- ✅ **Encoder Freeze/Unfreeze**: Optional schedule for gradual fine-tuning
+- ✅ **Hard Label Encoding**: Robust filtering of invalid labels
+- ✅ **Random Dataset Sampling**: Ensures all data is processed each epoch
+- ✅ **Gradient Clipping**: Prevents exploding gradients
+- ✅ **Reproducibility**: Random seed control
+
+**Quick Start:**
+```bash
+# Train with default settings (attention pooling, multi-seed PMA)
+python training/train_hier_boc_setvit.py \
+    --csv-file path/to/CHAMMI/combined_metadata.csv \
+    --root-dir path/to/CHAMMI/ \
+    --encoder-type tiny \
+    --channel-embed-mode attn_pool \
+    --pma-num-seeds 4 \
+    --encoder-lr-mult 0.2 \
+    --epochs 20
+
+# Evaluate trained model
+python training/evaluate_hier_boc.py \
+    --checkpoint checkpoints/hier_boc_setvit_tiny/best_model.pth \
+    --csv-file path/to/CHAMMI/combined_metadata.csv \
+    --root-dir path/to/CHAMMI/
+```
+
+**Model Architecture:**
+- **Per-Channel Encoder**: Pretrained ViT-Tiny/Small processes each channel independently
+- **Channel Embedding**: Three modes available:
+  - `"cls"`: Uses CLS token (original)
+  - `"mean_patches"`: Mean pooling over patch tokens
+  - `"attn_pool"`: Attention pooling with learnable query (default, recommended)
+- **Channel Aggregator**: Set Transformer with Pooling-by-Multihead-Attention (PMA)
+- **Head**: Cross-entropy or ProxyNCA++ for metric learning
+
+For detailed model documentation, see:
+- `HIER_BOC_SETVIT_README.md` - Model architecture details
+- `NEW_FEATURES_SUMMARY.md` - Complete list of new features
+- `COMPREHENSIVE_RESULTS_SUMMARY.md` - Experimental results
+
 ## Documentation
 
 - **Quick Start**: See `FOR_TEAMMATES.md`
 - **Full Documentation**: See `CHAMMI_IMPLEMENTATION_SUMMARY.md`
+- **Model Documentation**: See `HIER_BOC_SETVIT_README.md` and `NEW_FEATURES_SUMMARY.md`
+- **Results**: See `COMPREHENSIVE_RESULTS_SUMMARY.md`
 - **API Reference**: See `channel_adaptive_pipeline/CHAMMI_DATASET_README.md`
 - **Test Results**: See `DATALOADER_TEST_RESULTS.md`
 
@@ -272,3 +330,25 @@ The original CHAMMI benchmark code and data can be found at:
 ---
 
 **Status**: ✅ Dataset pipeline complete and ready for training any channel-adaptive model
+
+---
+
+## Recent Updates (December 2024)
+
+### Model Enhancements
+- **Attention Pooling**: New default mode for patch token aggregation with learnable query
+- **Channel Gating**: Optional learnable gating mechanism for channel importance
+- **Multi-Seed PMA**: Support for multiple bag queries (K queries) in channel aggregation
+- **Performance**: Vectorized channel dropout for faster training
+
+### Training Improvements
+- **ProxyNCA Optimization**: Proxies now properly optimized as separate parameter group
+- **Two-Tier Learning Rates**: Different learning rates for encoder vs. rest of model
+- **Encoder Freeze/Unfreeze**: Optional schedule for gradual fine-tuning
+- **Hard Label Encoding**: Robust filtering of invalid/unknown labels
+- **Random Dataset Sampling**: Ensures all batches processed each epoch with random dataset selection
+- **Gradient Clipping**: Prevents exploding gradients
+- **Improved LR Scheduler**: Pure Python cosine decay with warmup
+- **Reproducibility**: Random seed control for reproducible experiments
+
+See `NEW_FEATURES_SUMMARY.md` for complete details.
