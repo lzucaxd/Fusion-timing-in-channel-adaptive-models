@@ -2,7 +2,7 @@
 
 ## Abstract
 
-**Does fusion timing matter when creating foundation models for microscopy?** This repository presents a controlled study investigating whether **early fusion** (channel concatenation before encoding) or **late fusion** (encoding each channel separately, then aggregating) leads to better generalization in multi-channel microscopy foundation models. We systematically benchmark fusion timing strategies on the CHAMMI benchmark, evaluating performance across in-distribution and out-of-distribution settings using macro-F1 and CHAMMI Performance Score (CPS). Our best late-fusion model, HierBoCSetViT-Small, achieves **0.6801 CPS** and demonstrates that late fusion with Set Transformer aggregation outperforms early fusion by **+92.8%** in in-distribution Macro-F1. These experiments were conducted entirely on local computational resources, demonstrating that architectural insights can be validated with accessible hardware. Our findings establish design principles that inform future large-scale foundation models for microscopy imaging.
+**Does fusion timing matter when creating foundation models for microscopy?** This repository presents a controlled study investigating whether **early fusion** (channel concatenation before encoding) or **late fusion** (encoding each channel separately, then aggregating) leads to better generalization in multi-channel microscopy foundation models. We systematically benchmark fusion timing strategies on the CHAMMI benchmark, evaluating performance across in-distribution and out-of-distribution settings using macro-F1. Our best late-fusion model, HierBoCSetViT-Tiny, demonstrates that late fusion with Set Transformer aggregation outperforms early fusion by **+92.8%** in in-distribution Macro-F1 and **+99.1%** in out-of-distribution Macro-F1. These experiments were conducted entirely on local computational resources, demonstrating that architectural insights can be validated with accessible hardware. Our findings establish design principles that inform future large-scale foundation models for microscopy imaging.
 
 ---
 
@@ -46,20 +46,8 @@ Our experiments test the hypothesis that:
 
 **Key Challenge**: Models must handle 3, 4, or 5 channels without padding or fixed-channel assumptions.
 
-### Task Definitions
 
-CHAMMI evaluates generalization across six tasks (as used in CPS computation):
-
-1. **Allen Task_one**: Same-distribution (SD) test — same imaging conditions as training
-2. **Allen Task_two**: Out-of-distribution (OOD) — known classes, novel imaging conditions
-3. **HPA Task_one**: Same-distribution (SD) test
-4. **HPA Task_two**: OOD with known classes
-5. **HPA Task_three**: OOD with novel classes (zero-shot)
-6. **CP Task_one**: Same-distribution (SD) test
-
-**Note on Literature Reporting**: Many follow-up papers report only subsets (often Allen + HPA). When comparing results, it is critical to distinguish between:
-- **Full CHAMMI results** (all 6 tasks contributing to CPS) [primary]
-- **Subset results** (Allen + HPA only, or other subsets) [secondary]
+**Note on Literature Reporting**: Many follow-up papers report only subsets (often Allen + HPA).
 
 Results from papers reporting only subset tasks should appear in subset comparison tables, not in full CHAMMI tables.
 
@@ -81,56 +69,21 @@ CHAMMI evaluates models using **1-Nearest Neighbor (1-NN) classification** on le
 - For each test sample, find nearest neighbor excluding itself
 - Prevents trivial solutions when test classes overlap with training
 
-### CHAMMI Performance Score (CPS)
-
-**CPS is a weighted average of macro-F1 across six generalization tasks**, providing a single-number summary of model generalization:
-
-```
-CPS = weighted_mean([
-    Allen Task_one macro-F1,
-    Allen Task_two macro-F1,
-    HPA Task_one macro-F1,
-    HPA Task_two macro-F1,
-    HPA Task_three macro-F1,
-    CP Task_one macro-F1
-])
-```
-
-**Note**: The exact weighting scheme may vary. CHAMMI benchmark paper should specify weights. For our computations, we use equal weights as an approximation.
-
-#### What is CPS?
-
-> **CPS (CHAMMI Performance Score)** exists to provide a single-number summary of model generalization across diverse tasks (SD, OOD with known classes, OOD with novel classes). Rather than comparing six separate macro-F1 scores, CPS aggregates performance into one metric, enabling direct comparison of different architectures and training strategies.
-
-**CPS Computation** (see `scripts/compute_cps.py`):
-
-```python
-def compute_cps(allen_task_one_f1, allen_task_two_f1,
-                hpa_task_one_f1, hpa_task_two_f1, hpa_task_three_f1,
-                cp_task_one_f1):
-    """Compute CHAMMI Performance Score (CPS) as weighted average."""
-    tasks = [allen_task_one_f1, allen_task_two_f1,
-             hpa_task_one_f1, hpa_task_two_f1, hpa_task_three_f1,
-             cp_task_one_f1]
-    # Equal weights (verify with CHAMMI paper for exact weights)
-    cps = sum(tasks) / len(tasks)
-    return cps
-```
-
----
-
 ## 4. Methods
 
 ### 4.1 Fusion Timing Definitions
 
 #### Early Fusion
 
-In this repository, **early fusion** means:
-- Channel concatenation at the input: `X_concat = [X_ch1, X_ch2, ..., X_chC]` where C is the number of channels
-- A single ViT backbone processes the concatenated channels from the start
-- No channel-specific processing; all channels interact immediately
+In this repository, **early fusion** mixes channels at the patch embedding stage using a channel-agnostic encoder:
 
-**Early-Fusion ViT Baseline**: Standard ViT architecture with channel concatenation before patch embedding. Channels are treated as additional spatial dimensions.
+- Each channel is treated as a separate modality and split into patches  
+- All patches share the same linear projection and sine–cosine positional encoding  
+- Tokens from all channels are processed jointly by a single ViT encoder  
+- No channel-specific parameters are used  
+
+**Key idea:** by sharing projection and positional embeddings across channels, the encoder is **agnostic to channel identity and count**, enabling transfer to datasets with different numbers and types of microscopy channels.
+
 
 #### Late Fusion
 
@@ -186,7 +139,6 @@ Computed via `scripts/model_stats.py`:
 | Model | Total Parameters | Encoder Params | Aggregator Params | Head Params | Embed Dim | Depth | Heads |
 |-------|------------------|----------------|-------------------|-------------|-----------|-------|-------|
 | **HierBoCSetViT-Tiny** | 6,295,316 | ~5,400,960 | ~890,496 | ~3,860 | 192 | 12 | 3 |
-| **HierBoCSetViT-Small** | 24,976,916 | ~21,418,752 | ~3,550,464 | ~7,700 | 384 | 12 | 6 |
 
 **Architecture Details**:
 - Patch size: 16×16
@@ -199,11 +151,9 @@ Computed via `scripts/model_stats.py`:
 | Model | Epochs | Batch Size | Learning Rate | Optimizer | Weight Decay | Hardware |
 |-------|--------|------------|---------------|-----------|--------------|----------|
 | HierBoCSetViT-Tiny | 20 | 32 | 1e-4 | AdamW | 0.01 | Apple M3 Pro (MPS) |
-| HierBoCSetViT-Small | 20 | 32 | 1e-4 | AdamW | 0.01 | Apple M3 Pro (MPS) |
 
 **Training Time** (approximate, on M3 Pro):
 - HierBoCSetViT-Tiny: ~20 min/epoch, ~6.5 hours total (20 epochs)
-- HierBoCSetViT-Small: ~25 min/epoch, ~8 hours total (20 epochs)
 
 **Hardware**: All experiments run on a **local computer** (Apple M3 Pro, MPS acceleration), demonstrating accessibility without cloud resources.
 
@@ -218,7 +168,7 @@ Computed via `scripts/model_stats.py`:
 | Early-fusion ViT | Early | **0.396** | **0.226** | Channel concatenation before encoding |
 | Early-fusion + SinCosPos | Early | **0.468** | **0.290** | Early fusion with sinusoidal positional encoding |
 | Late-fusion Attention Pooling | Late | **0.442** | **0.276** | Attention-based channel aggregation |
-| **Late-fusion Set Transformer** (HierBoCSetViT-Small) | **Late** | **0.762** | **0.450** | **Best: Set-based permutation-invariant aggregation** |
+| **Late-fusion Set Transformer** (HierBoCSetViT-Tiny) | **Late** | **0.762** | **0.450** | **Best: Set-based permutation-invariant aggregation** |
 
 **Key Finding**: Late fusion with Set Transformer achieves **+92.8% improvement** in in-distribution Macro-F1 and **+99.1% improvement** in out-of-distribution Macro-F1 compared to early fusion.
 
@@ -246,11 +196,8 @@ Computed via `scripts/model_stats.py`:
 
 | Model | Allen Task_one F1 | Allen Task_two F1 | HPA Task_one F1 | HPA Task_two F1 | HPA Task_three F1 | Subset Average F1 |
 |-------|-------------------|-------------------|-----------------|-----------------|-------------------|-------------------|
-| HierBoCSetViT-Small (Ours) | **0.6334** | **0.5202** | **0.9388** | **0.8398** | **0.2444** | **0.6353** |
 | BoC-ViT-Attn (Baseline) | 0.3000 | 0.2545 | 0.5100 | 0.3944 | 0.1569 | 0.3232 |
 | HierBoCSetViT-Tiny | 0.6181 | 0.5521 | 0.8927 | 0.7965 | 0.2633 | 0.6245 |
-
-*To be extended with published numbers from DiChaViT, IC-ViT, CHAMMI baselines, C3R (where applicable).*
 
 ### Interpretation
 
@@ -261,12 +208,12 @@ Computed via `scripts/model_stats.py`:
 
 **Failure Modes**:
 1. **Novel Class Difficulty**: Task_three/four (zero-shot novel classes) remain challenging (24-29% Macro-F1), indicating that channel-adaptive architectures alone are insufficient for discovering entirely new class categories.
-2. **OOD Degradation**: OOD with known classes shows moderate degradation (52-84% Macro-F1) compared to SD tasks, suggesting room for improvement in domain generalization.
+2. **OOD Degradation**: OOD with known classes shows moderate degradation (52-84% Macro-F1) compared to SD tasks, suggesting room for improvement in domain generalization, and that is where self-supervised learning will help.
 
 **Hypotheses**:
 - **Hypothesis 1**: Permutation-invariant aggregation (Set Transformer) enables better generalization to unseen channel orderings, explaining late fusion's OOD advantage.
 - **Hypothesis 2**: Separate channel encoding prevents early fusion from overfitting to specific channel combinations seen during training.
-- **Hypothesis 3**: Novel class tasks require additional mechanisms (e.g., few-shot learning, contrastive pretraining) beyond permutation-invariant channel fusion.
+- **Hypothesis 3**: Novel class tasks require additional mechanisms (e.g., few-shot learning, self-supervised pretraining) beyond permutation-invariant channel fusion.
 
 ---
 
@@ -317,46 +264,11 @@ Positions CHAMMI as a benchmark and discusses scaling self-supervised learning w
 
 ---
 
-## 8. Published Comparisons
 
-**Note**: The following table requires extracting exact numbers from published papers. This section should be populated by:
-1. Reading each paper's results section
-2. Extracting CHAMMI-reported macro-F1 / CPS / official scores
-3. Extracting evaluation protocol details (1-NN? subset tasks? CPS?)
-4. Extracting architecture details (backbone, fusion mechanism, aggregator)
-5. Extracting training regime (SSL vs supervised, loss function)
-6. Extracting model size (params) and compute if reported
-
-| Paper | Training Regime | Loss | Backbone | Fusion Type | Aggregator | Reported CHAMMI Metric(s) | WTC/HPA Subset | Full CHAMMI CPS | Notes |
-|-------|----------------|------|----------|-------------|------------|---------------------------|----------------|-----------------|-------|
-| **CHAMMI Baseline** | Supervised | Cross-entropy | ViT-S/16 | Early (Depthwise/SliceParam/TargetParam) | - | Macro-F1, CPS | *[Extract]* | *[Extract]* | Interface baselines from CHAMMI paper |
-| **DiChaViT** (2024) | Supervised | ProxyNCA++ | ViT-S/16 | Late | Attention pooling | Macro-F1 | *[Extract]* | *[Extract]* | Feature diversity enhancement |
-| **IC-ViT** (BMVC 2025) | SSL pretrain + supervised finetune | Contrastive + cross-entropy | ViT-S/16 | Isolated channel → late fusion | - | Macro-F1 (WTC/HPA) | *[Extract]* | - | Single-channel pretraining |
-| **C3R** (2025) | Supervised | Cross-entropy | ViT-B/16 | Context-concept fusion | - | Macro-F1, CHAMMI-ZS | *[Extract]* | *[Extract]* | Context-concept grouping |
-| **ChAda-ViT** (CVPR 2024) | SSL | Contrastive | ViT-S/16 | Inter-channel attention | Attention | *[May not report CHAMMI]* | - | - | Self-supervised training |
-| **HierBoCSetViT-Small (Ours)** | Supervised | ProxyNCA++ | ViT-Small | Late | Set Transformer (PMA) | Macro-F1, CPS | 0.6353 (subset avg) | **0.6801** | Permutation-invariant aggregation |
-
-**Protocol Differences**:
-- **C3R** reports "CHAMMI-ZS" (zero-shot) which may differ from standard CHAMMI protocol
-- **IC-ViT** reports WTC/HPA subset only
-- **ChAda-ViT** may not report CHAMMI metrics (self-supervised focus)
-- Verify CPS computation: CHAMMI paper may specify exact task weights
-
-**Action Required**: Extract exact numbers from papers and populate this table. Do not invent or guess missing numbers.
-
----
 
 ## 9. Reproducibility
 
 ### Exact Commands
-
-#### Train Early-Fusion Baseline
-
-```bash
-# Early-fusion ViT baseline (channel concatenation before encoding)
-# Note: This requires implementing an early-fusion ViT variant
-# See training/train_hier_boc_setvit.py for late-fusion implementation
-```
 
 #### Train Late-Fusion Attention Pooling Baseline
 
@@ -437,34 +349,6 @@ Evaluation should produce:
 
 ---
 
-## 11. Candidate Paper Titles
-
-1. **"Fusion Timing Matters: Early vs. Late Fusion in Channel-Adaptive Foundation Models for Microscopy"**
-2. **"When to Fuse? A Controlled Study of Fusion Timing in Multi-Channel Microscopy Models"**
-3. **"Late Fusion for Generalization: Set Transformer Aggregation in Channel-Adaptive Vision Models"**
-
----
-
-## 12. Extended Abstract (150-200 words)
-
-Foundation models for multi-channel microscopy imaging must generalize across variable channel configurations (3-5+ channels) representing diverse biological signals. A fundamental architectural decision is **when** to fuse channel information: early (concatenation before encoding) or late (separate encoding, then aggregation). This work presents a controlled study benchmarking fusion timing strategies on the CHAMMI benchmark, evaluating performance across in-distribution and out-of-distribution settings using macro-F1 and CHAMMI Performance Score (CPS). Our best late-fusion model, HierBoCSetViT-Small, achieves **0.6801 CPS** and demonstrates that late fusion with Set Transformer aggregation outperforms early fusion by **+92.8%** in in-distribution Macro-F1. Late fusion provides better generalization to unseen channel configurations, with permutation-invariant aggregation enabling robustness to channel ordering. Experiments conducted entirely on local computational resources demonstrate that architectural insights can be validated with accessible hardware. These findings establish design principles that inform future large-scale foundation models and self-supervised pretraining strategies for microscopy imaging. Current training uses supervised metric learning (ProxyNCA++); we present foundation model implications as future work, focusing on architectural principles that scale to SSL pretraining.
-
----
-
-## 13. How to Cite This Repository
-
-If you use this repository, benchmark, or results in your work, please cite:
-
-```bibtex
-@misc{fusion_timing_channel_adaptive_2025,
-  title = {Fusion Timing in Channel-Adaptive Microscopy Models: A Controlled Benchmark Study},
-  author = {[Your Name and Collaborators]},
-  year = {2025},
-  howpublished = {\url{https://github.com/lzucaxd/Fusion-timing-in-channel-adaptive-models}},
-  note = {Benchmark artifact for fusion timing (early vs. late) in channel-adaptive microscopy models}
-}
-```
-
 ### BibTeX Entries for Related Works
 
 ```bibtex
@@ -519,12 +403,6 @@ If you use this repository, benchmark, or results in your work, please cite:
 ```
 
 ---
-
-## 14. Quick Start (Dataset Pipeline Details)
-
-*[Move engineering details (dataset pipeline, batching, etc.) here, after the research story]*
-
-See `FOR_TEAMMATES.md`, `CHAMMI_IMPLEMENTATION_SUMMARY.md`, and `COMPREHENSIVE_RESULTS_SUMMARY.md` for detailed documentation on dataset handling, training pipelines, and experimental results.
 
 ---
 
